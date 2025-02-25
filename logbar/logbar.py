@@ -207,7 +207,7 @@ def setup_logger():
     # logger.addHandler(handler)
 
     # clear space from previous logs
-    print("")
+    print("", end='\n', flush=True)
 
     return logger
 
