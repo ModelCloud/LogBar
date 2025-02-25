@@ -41,6 +41,7 @@ class LEVEL(str, Enum):
     WARN = "WARN"
     INFO = "INFO"
     ERROR = "ERROR"
+    CRITICAL = "CRIT"
 
 def setup_logger():
     global logger
@@ -131,7 +132,7 @@ def setup_logger():
             self.error = self.error_cls(logger=self)
 
         def _process(self, level: LEVEL, msg, *args, **kwargs):
-            from gptqmodel.utils.progress import ProgressBar # hack: circular import
+            from logbar.progress import ProgressBar
 
             columns, _ = terminal_size()
             str_msg = str(msg)
@@ -191,7 +192,7 @@ def setup_logger():
     original_logger_cls = logging.getLoggerClass()
     logging.setLoggerClass(CustomLogger)
 
-    logger = logging.getLogger("gptqmodel")
+    logger = logging.getLogger("logbar")
     logging.setLoggerClass(original_logger_cls)
 
     logger.propagate = False
