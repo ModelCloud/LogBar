@@ -20,8 +20,7 @@ from time import sleep
 from logbar.progress import ProgressBar
 
 
-def generate_epanding_str_a_to_z():
-    # Initialize an empty list to store the strings
+def generate_expanding_str_a_to_z():
     strings = []
 
     # Loop through the alphabet from 'A' to 'Z'
@@ -38,7 +37,7 @@ def generate_epanding_str_a_to_z():
 
     return strings
 
-SAMPLES = generate_epanding_str_a_to_z()
+SAMPLES = generate_expanding_str_a_to_z()
 REVERSED_SAMPLES = reversed(SAMPLES)
 
 class TestProgressBar(unittest.TestCase):
