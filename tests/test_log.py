@@ -1,6 +1,6 @@
 import unittest
 
-from logbar.logbar import LogBar
+from logbar import LogBar
 
 log = LogBar.shared()
 
