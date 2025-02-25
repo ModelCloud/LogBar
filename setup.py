@@ -18,7 +18,7 @@ from pathlib import Path
 
 from setuptools import find_packages, setup
 
-__version__ = "0.0.1-dev"
+__version__ = "0.0.2"
 
 with open("requirements.txt") as f:
     requirements = f.read().splitlines()
