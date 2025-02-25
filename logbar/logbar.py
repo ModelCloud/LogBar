@@ -16,6 +16,7 @@
 
 import logging
 from enum import Enum
+from typing import Optional, Iterable
 
 from logbar.terminal import terminal_size
 
@@ -44,171 +45,187 @@ class LEVEL(str, Enum):
     ERROR = "ERROR"
     CRITICAL = "CRIT"
 
-def setup_logger():
-    global logger
-    if logger is not None:
+class LogBar(logging.Logger):
+    history = set()
+    history_limit = 1000
+
+    @classmethod
+    # return a shared global/singleton logger
+    def shared(cls, override_logger: Optional[bool] = False):
+        global logger
+        if logger is not None:
+            return logger
+
+        # save logger class
+        if not override_logger:
+            original_logger_cls = logging.getLoggerClass()
+
+        logging.setLoggerClass(LogBar)
+
+        logger = logging.getLogger("logbar")
+
+        # restore logger cls
+        if not override_logger:
+            logging.setLoggerClass(original_logger_cls)
+
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        # handler = logging.StreamHandler(sys.stdout)
+        # handler.setFormatter(formatter)
+        # handler.flush = sys.stdout.flush
+        # logger.addHandler(handler)
+
+        # clear space from previous logs
+        print("", end='\n', flush=True)
+
         return logger
 
-    class CustomLogger(logging.Logger):
-        history = set()
-        history_limit = 1000
 
-        def history_add(self, msg) -> bool:
-            h = hash(msg) # TODO only msg is checked not level + msg
-            if h in self.history:
-                return False # add failed since it already exists
+    def pb(self, iterable: Iterable):
+        from logbar.progress import ProgressBar
 
-            if len(self.history) > self.history_limit:
-                self.history.clear()
+        return ProgressBar(iterable)
 
-            self.history.add(h)
+    def history_add(self, msg) -> bool:
+        h = hash(msg) # TODO only msg is checked not level + msg
+        if h in self.history:
+            return False # add failed since it already exists
 
-            return True
+        if len(self.history) > self.history_limit:
+            self.history.clear()
 
-        class critical_cls:
-            def __init__(self, logger):
-                self.logger = logger
+        self.history.add(h)
 
-            def once(self, msg, *args, **kwargs):
-                if self.logger.history_add(msg):
-                    self(msg, *args, **kwargs)
+        return True
 
-            def __call__(self, msg, *args, **kwargs):
-                self.logger._process(LEVEL.CRITICAL, msg, *args, **kwargs)
+    class critical_cls:
+        def __init__(self, logger):
+            self.logger = logger
 
-        class warn_cls:
-            def __init__(self, logger):
-                self.logger = logger
+        def once(self, msg, *args, **kwargs):
+            if self.logger.history_add(msg):
+                self(msg, *args, **kwargs)
 
-            def once(self, msg, *args, **kwargs):
-                if self.logger.history_add(msg):
-                    self(msg, *args, **kwargs)
+        def __call__(self, msg, *args, **kwargs):
+            self.logger._process(LEVEL.CRITICAL, msg, *args, **kwargs)
 
-            def __call__(self, msg, *args, **kwargs):
-                self.logger._process(LEVEL.WARN, msg, *args, **kwargs)
+    class warn_cls:
+        def __init__(self, logger):
+            self.logger = logger
 
-        class debug_cls:
-            def __init__(self, logger):
-                self.logger = logger
+        def once(self, msg, *args, **kwargs):
+            if self.logger.history_add(msg):
+                self(msg, *args, **kwargs)
 
-            def once(self, msg, *args, **kwargs):
-                if self.logger.history_add(msg):
-                    self(msg, *args, **kwargs)
+        def __call__(self, msg, *args, **kwargs):
+            self.logger._process(LEVEL.WARN, msg, *args, **kwargs)
 
-            def __call__(self, msg, *args, **kwargs):
-                self.logger._process(LEVEL.DEBUG, msg, *args, **kwargs)
+    class debug_cls:
+        def __init__(self, logger):
+            self.logger = logger
 
-        class info_cls:
-            def __init__(self, logger):
-                self.logger = logger
+        def once(self, msg, *args, **kwargs):
+            if self.logger.history_add(msg):
+                self(msg, *args, **kwargs)
 
-            def once(self, msg, *args, **kwargs):
-                if self.logger.history_add(msg):
-                    self(msg, *args, **kwargs)
+        def __call__(self, msg, *args, **kwargs):
+            self.logger._process(LEVEL.DEBUG, msg, *args, **kwargs)
 
-            def __call__(self, msg, *args, **kwargs):
-                self.logger._process(LEVEL.INFO, msg, *args, **kwargs)
+    class info_cls:
+        def __init__(self, logger):
+            self.logger = logger
 
-        class error_cls:
-            def __init__(self, logger):
-                self.logger = logger
+        def once(self, msg, *args, **kwargs):
+            if self.logger.history_add(msg):
+                self(msg, *args, **kwargs)
 
-            def once(self, msg, *args, **kwargs):
-                if self.logger.history_add(msg):
-                    self(msg, *args, **kwargs)
+        def __call__(self, msg, *args, **kwargs):
+            self.logger._process(LEVEL.INFO, msg, *args, **kwargs)
 
-            def __call__(self, msg, *args, **kwargs):
-                self.logger._process(LEVEL.ERROR, msg, *args, **kwargs)
+    class error_cls:
+        def __init__(self, logger):
+            self.logger = logger
 
-        def __init__(self, name):
-            super().__init__(name)
-            self._warning = self.warning
-            self._debug = self.debug
-            self._info = self.info
-            self._error = self.error
-            self._critical = self.critical
+        def once(self, msg, *args, **kwargs):
+            if self.logger.history_add(msg):
+                self(msg, *args, **kwargs)
 
-            self.warn = self.warn_cls(logger=self)
-            self.debug = self.debug_cls(logger=self)
-            self.info = self.info_cls(logger=self)
-            self.error = self.error_cls(logger=self)
-            self.critical = self.critical_cls(logger=self)
+        def __call__(self, msg, *args, **kwargs):
+            self.logger._process(LEVEL.ERROR, msg, *args, **kwargs)
 
-        def _process(self, level: LEVEL, msg, *args, **kwargs):
-            from logbar.progress import ProgressBar
+    def __init__(self, name):
+        super().__init__(name)
+        self._warning = self.warning
+        self._debug = self.debug
+        self._info = self.info
+        self._error = self.error
+        self._critical = self.critical
 
-            columns, _ = terminal_size()
-            str_msg = str(msg)
+        self.warn = self.warn_cls(logger=self)
+        self.debug = self.debug_cls(logger=self)
+        self.info = self.info_cls(logger=self)
+        self.error = self.error_cls(logger=self)
+        self.critical = self.critical_cls(logger=self)
 
-            global last_pb_instance
-            if isinstance(last_pb_instance, ProgressBar) and not last_pb_instance.closed:
-                 buf = f'\r'
-                 if columns > 0:
-                    str_msg += " " * columns
+    def _process(self, level: LEVEL, msg, *args, **kwargs):
+        from logbar.progress import ProgressBar
 
-                 print(buf,end='',flush=True)
+        columns, _ = terminal_size()
+        str_msg = str(msg)
 
-            # Get the color for the log level
+        global last_pb_instance
+        if isinstance(last_pb_instance, ProgressBar) and not last_pb_instance.closed:
+             buf = f'\r'
+             if columns > 0:
+                str_msg += " " * columns
 
-            reset = COLORS["RESET"]
-            color = COLORS.get(level.value, reset)
+             print(buf,end='',flush=True)
 
-            out_len = 5 + 1 + len(str_msg)
-            paddding_end = " " * (columns - out_len)
+        # Get the color for the log level
 
-            padding = " " * (5 - len(level.value)) # 5 is max enum string length
-            print(f"{color}{level.value}{reset}{padding} {str_msg}", end='\n', flush=True)
-            # if level == LEVEL.INFO:
-            #     print(f"INFO: {str_msg}", end='',flush=True)
-            # elif level == LEVEL.WARN:
-            #     print(f"WARN: {str_msg}", end='',flush=True)
-            # elif level == LEVEL.ERROR:
-            #     print(f"ERROR: {str_msg}", end='',flush=True)
-            # elif level == LEVEL.DEBUG:
-            #     print(f"DEBUG: {str_msg}", end='',flush=True)
-            # else:
-            #     raise RuntimeError(f"Unknown logging level {level}")
+        reset = COLORS["RESET"]
+        color = COLORS.get(level.value, reset)
 
-            # Print the message with the appropriate color
-            #print(f"{color}{level.value}{reset}{padding} {str_msg}")
+        out_len = 5 + 1 + len(str_msg)
+        paddding_end = " " * (columns - out_len)
 
-            # if level == LEVEL.INFO:
-            #     self._info(str_msg, *args, **kwargs)
-            #
-            # elif level == LEVEL.WARN:
-            #     self._warning(str_msg, *args, **kwargs)
-            # elif level == LEVEL.ERROR:
-            #     self._error(str_msg, *args, **kwargs)
-            # elif level == LEVEL.DEBUG:
-            #     self._debug(str_msg, *args, **kwargs)
-            # else:
-            #     raise RuntimeError(f"Unknown logging level {level}")
+        padding = " " * (5 - len(level.value)) # 5 is max enum string length
+        print(f"{color}{level.value}{reset}{padding} {str_msg}", end='\n', flush=True)
+        # if level == LEVEL.INFO:
+        #     print(f"INFO: {str_msg}", end='',flush=True)
+        # elif level == LEVEL.WARN:
+        #     print(f"WARN: {str_msg}", end='',flush=True)
+        # elif level == LEVEL.ERROR:
+        #     print(f"ERROR: {str_msg}", end='',flush=True)
+        # elif level == LEVEL.DEBUG:
+        #     print(f"DEBUG: {str_msg}", end='',flush=True)
+        # else:
+        #     raise RuntimeError(f"Unknown logging level {level}")
 
-            if isinstance(last_pb_instance, ProgressBar):
-                if not last_pb_instance.closed:
-                    # only do this for our instance
-                    if self == logger:
-                        last_pb_instance.draw()
-                else:
-                    last_pb_instance = None
+        # Print the message with the appropriate color
+        #print(f"{color}{level.value}{reset}{padding} {str_msg}")
 
-    # original_logger_cls = logging.getLoggerClass()
-    logging.setLoggerClass(CustomLogger)
+        # if level == LEVEL.INFO:
+        #     self._info(str_msg, *args, **kwargs)
+        #
+        # elif level == LEVEL.WARN:
+        #     self._warning(str_msg, *args, **kwargs)
+        # elif level == LEVEL.ERROR:
+        #     self._error(str_msg, *args, **kwargs)
+        # elif level == LEVEL.DEBUG:
+        #     self._debug(str_msg, *args, **kwargs)
+        # else:
+        #     raise RuntimeError(f"Unknown logging level {level}")
 
-    logger = logging.getLogger("logbar")
-    # logging.setLoggerClass(original_logger_cls)
+        if isinstance(last_pb_instance, ProgressBar):
+            if not last_pb_instance.closed:
+                # only do this for our instance
+                if self == logger:
+                    last_pb_instance.draw()
+            else:
+                last_pb_instance = None
 
-    logger.propagate = False
-    logger.setLevel(logging.INFO)
 
-    # handler = logging.StreamHandler(sys.stdout)
-    # handler.setFormatter(formatter)
-    # handler.flush = sys.stdout.flush
-    # logger.addHandler(handler)
-
-    # clear space from previous logs
-    print("", end='\n', flush=True)
-
-    return logger
 
 

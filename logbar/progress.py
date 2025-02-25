@@ -20,10 +20,10 @@ from enum import Enum
 from typing import Iterable, Optional
 from warnings import warn
 
-from logbar.logbar import setup_logger, update_last_pb_instance
+from logbar.logbar import update_last_pb_instance, LogBar
 from logbar.terminal import terminal_size
 
-logger = setup_logger()
+logger = LogBar.shared()
 
 # TODO FIXME: what does this do exactly?
 class ProgressBarWarning(Warning):
