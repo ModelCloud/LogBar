@@ -1,3 +1,1 @@
-from . import logbar
-
-__all__ = ["logbar"]
+from .logbar import LogBar

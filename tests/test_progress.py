@@ -17,7 +17,7 @@
 import unittest
 from time import sleep
 
-from logbar.logbar import LogBar
+from logbar import LogBar
 
 log = LogBar.shared(override_logger=True)
 
