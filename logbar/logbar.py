@@ -33,6 +33,7 @@ COLORS = {
     "INFO": "\033[32m",  # Green
     "WARN": "\033[33m",  # Yellow
     "ERROR": "\033[31m",  # Red
+    "CRIT": "\033[31m",  # Red
     "RESET": "\033[0m",  # Reset to default
 }
 
@@ -125,11 +126,13 @@ def setup_logger():
             self._debug = self.debug
             self._info = self.info
             self._error = self.error
+            self._critical = self.critical
 
             self.warn = self.warn_cls(logger=self)
             self.debug = self.debug_cls(logger=self)
             self.info = self.info_cls(logger=self)
             self.error = self.error_cls(logger=self)
+            self.critical = self.critical_cls(logger=self)
 
         def _process(self, level: LEVEL, msg, *args, **kwargs):
             from logbar.progress import ProgressBar
@@ -154,7 +157,7 @@ def setup_logger():
             paddding_end = " " * (columns - out_len)
 
             padding = " " * (5 - len(level.value)) # 5 is max enum string length
-            print(f"{color}{level.value}{reset}{padding} {str_msg}", end='', flush=True)
+            print(f"{color}{level.value}{reset}{padding} {str_msg}", end='\n', flush=True)
             # if level == LEVEL.INFO:
             #     print(f"INFO: {str_msg}", end='',flush=True)
             # elif level == LEVEL.WARN:
