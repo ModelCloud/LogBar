@@ -18,7 +18,7 @@ import logging
 from enum import Enum
 from typing import Optional, Iterable
 
-from logbar.terminal import terminal_size
+from .terminal import terminal_size
 
 # global static/shared logger instance
 logger = None
@@ -190,7 +190,7 @@ class LogBar(logging.Logger):
         color = COLORS.get(level.value, reset)
 
         level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
-        print(f"{color}{level.value}{reset}{level_padding} {str_msg}", end='', flush=True)
+        print(f"{color}{level.value}{reset}{level_padding} {str_msg}", end='\n', flush=True)
 
         if isinstance(last_pb_instance, ProgressBar):
             if not last_pb_instance.closed:

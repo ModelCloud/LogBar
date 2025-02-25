@@ -20,9 +20,9 @@ from enum import Enum
 from typing import Iterable, Optional
 from warnings import warn
 
-from logbar import LogBar
-from logbar.logbar import update_last_pb_instance
-from logbar.terminal import terminal_size
+from . import LogBar
+from .logbar import update_last_pb_instance
+from .terminal import terminal_size
 
 logger = LogBar.shared()
 
