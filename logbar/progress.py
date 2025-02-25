@@ -116,7 +116,6 @@ class ProgressBar:
 
     def draw(self):
         columns, _ = terminal_size()
-        bar_length = columns
 
         pre_bar_size = 0 # char length of content before progress bar
 
