@@ -176,13 +176,12 @@ class LogBar(logging.Logger):
         columns, _ = terminal_size()
         str_msg = str(msg)
 
+        if columns > 0:
+            str_msg += " " * (columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))  # -2 for cursor + space between LEVEL and msg
+
         global last_pb_instance
         if isinstance(last_pb_instance, ProgressBar) and not last_pb_instance.closed:
-             buf = f'\r'
-             if columns > 0:
-                str_msg += " " * columns
-
-             print(buf,end='',flush=True)
+            print('\r',end='',flush=True)
 
         # Get the color for the log level
 
@@ -190,12 +189,13 @@ class LogBar(logging.Logger):
         color = COLORS.get(level.value, reset)
 
         level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
-        print(f"{color}{level.value}{reset}{level_padding} {str_msg}", end='\n', flush=True)
+        print(f"\r{color}{level.value}{reset}{level_padding} {str_msg}", end='\n', flush=True)
 
         if isinstance(last_pb_instance, ProgressBar):
             if not last_pb_instance.closed:
                 # only do this for our instance
                 if self == logger:
+                    #print('\r', end='', flush=True)
                     last_pb_instance.draw()
             else:
                 last_pb_instance = None

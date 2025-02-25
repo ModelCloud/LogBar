@@ -2,7 +2,7 @@ import unittest
 
 from logbar import LogBar
 
-log = LogBar.shared()
+log = LogBar.shared(override_logger=True)
 
 class TestProgressBar(unittest.TestCase):
 
