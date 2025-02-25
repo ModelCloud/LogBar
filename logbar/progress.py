@@ -20,7 +20,8 @@ from enum import Enum
 from typing import Iterable, Optional
 from warnings import warn
 
-from logbar.logbar import update_last_pb_instance, LogBar
+from logbar import LogBar
+from logbar.logbar import update_last_pb_instance
 from logbar.terminal import terminal_size
 
 logger = LogBar.shared()
@@ -41,7 +42,6 @@ class RenderMode(str, Enum):
 class ProgressBar:
     def __init__(self, iterable: Iterable):
         self._iterating = False # state: in init or active iteration
-        self._skip_next_draw = False
 
         self._render_mode = RenderMode.AUTO
 
@@ -110,10 +110,6 @@ class ProgressBar:
         self._render_mode = RenderMode.MANUAL
         return self
 
-    def skip_next_draw(self):
-        if not self._skip_next_draw:
-            self._skip_next_draw = True
-
     def draw(self):
         columns, _ = terminal_size()
 
@@ -144,11 +140,11 @@ class ProgressBar:
         if self._subtitle and len(self._subtitle) < self.max_subtitle_len:
             padding += " " * (self.max_subtitle_len - len(self._subtitle))
 
-        bar_length = columns - pre_bar_size - len(log) - 2 # bar|_ == 2 chars
+        bar_length = columns - pre_bar_size - len(log) - 3 # bar|_ == 2 chars + 1 char for cursor
 
         filled_length = int(bar_length * self.step() // len(self))
         bar = self._fill * filled_length + '-' * (bar_length - filled_length)
-        self.log(bar=bar, log=log, padding=padding, end='') # '\n' if percent_num >= 1.0 else ''
+        self.log(bar=bar, log=log, pre_bar_padding=padding, end='') # '\n' if percent_num >= 1.0 else ''
 
     def calc_time(self, iteration):
         used_time = int(time.time() - self.time)
@@ -156,8 +152,7 @@ class ProgressBar:
         remaining = str(datetime.timedelta(seconds=int((used_time / max(iteration, 1)) * len(self))))
         return f"{formatted_time} / {remaining}"
 
-    def log(self, bar:str, log:str, padding:str = "", end: str = ""):
-        # print(f'\r{self.prefix} {self.info_text} |{bar}| {log}', end='', flush=True)
+    def log(self, bar:str, log:str, pre_bar_padding:str = "", end: str = ""):
         out = ""
         if self._title:
             out += self._title + " "
@@ -165,7 +160,8 @@ class ProgressBar:
         if self._subtitle:
             out += self._subtitle + " "
 
-        out += padding
+        if pre_bar_padding:
+            out += pre_bar_padding
 
         if self.ui_show_left_steps:
             out += self.ui_show_left_steps_text
@@ -241,7 +237,7 @@ class ProgressBar:
         iterable = self.iterable
 
         for obj in iterable:
-            # updat running state
+            # update running state
             if not self._iterating:
                 self.iterating = True
 
@@ -250,17 +246,10 @@ class ProgressBar:
             if self._render_mode == RenderMode.AUTO:
                 self.draw()
 
-            # if not self._skip_next_draw:
-            #     if self._render_mode == RenderMode.AUTO:
-            #         self.draw()
-            # else:
-            #     self._skip_next_draw = False
             yield obj
 
-        # self.progress()
         self.close()
         return
 
     def close(self):
         self.closed = True
-        #self.log(f"{self.fill * self.bar_length}", "100.0%", end="\n")

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from setuptools import find_packages, setup
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 with open("requirements.txt") as f:
     requirements = f.read().splitlines()
@@ -28,7 +28,7 @@ setup(
     version=__version__,
     author="ModelCloud",
     author_email="qubitium@modelcloud.ai",
-    description="A unified Logger and ProgressBar util with zero dependencies. ",
+    description="A unified Logger and ProgressBar util with zero dependencies.",
     long_description=(Path(__file__).parent / "README.md").read_text(encoding="UTF-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/ModelCloud/LogBar",

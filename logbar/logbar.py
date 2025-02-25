@@ -45,6 +45,8 @@ class LEVEL(str, Enum):
     ERROR = "ERROR"
     CRITICAL = "CRIT"
 
+LEVEL_MAX_LENGTH = 5 # ERROR/DEBUG is longest at 5 chars
+
 class LogBar(logging.Logger):
     history = set()
     history_limit = 1000
@@ -187,36 +189,8 @@ class LogBar(logging.Logger):
         reset = COLORS["RESET"]
         color = COLORS.get(level.value, reset)
 
-        out_len = 5 + 1 + len(str_msg)
-        paddding_end = " " * (columns - out_len)
-
-        padding = " " * (5 - len(level.value)) # 5 is max enum string length
-        print(f"{color}{level.value}{reset}{padding} {str_msg}", end='\n', flush=True)
-        # if level == LEVEL.INFO:
-        #     print(f"INFO: {str_msg}", end='',flush=True)
-        # elif level == LEVEL.WARN:
-        #     print(f"WARN: {str_msg}", end='',flush=True)
-        # elif level == LEVEL.ERROR:
-        #     print(f"ERROR: {str_msg}", end='',flush=True)
-        # elif level == LEVEL.DEBUG:
-        #     print(f"DEBUG: {str_msg}", end='',flush=True)
-        # else:
-        #     raise RuntimeError(f"Unknown logging level {level}")
-
-        # Print the message with the appropriate color
-        #print(f"{color}{level.value}{reset}{padding} {str_msg}")
-
-        # if level == LEVEL.INFO:
-        #     self._info(str_msg, *args, **kwargs)
-        #
-        # elif level == LEVEL.WARN:
-        #     self._warning(str_msg, *args, **kwargs)
-        # elif level == LEVEL.ERROR:
-        #     self._error(str_msg, *args, **kwargs)
-        # elif level == LEVEL.DEBUG:
-        #     self._debug(str_msg, *args, **kwargs)
-        # else:
-        #     raise RuntimeError(f"Unknown logging level {level}")
+        level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
+        print(f"{color}{level.value}{reset}{level_padding} {str_msg}", end='', flush=True)
 
         if isinstance(last_pb_instance, ProgressBar):
             if not last_pb_instance.closed:
@@ -225,7 +199,3 @@ class LogBar(logging.Logger):
                     last_pb_instance.draw()
             else:
                 last_pb_instance = None
-
-
-
-
