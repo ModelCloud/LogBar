@@ -31,13 +31,14 @@ jobs:
           for file in "$dir"/*; do
           [ -f "$file" ] || continue
           filename=$(basename "$file")
-          json_array+="\"$filename\","
+          if [[ "$filename" == test_*.py ]]; then
+            json_array+="\"$filename\","
+          fi
           done
 
           json_array="${json_array%,}]"
 
           echo "$json_array"
-
           echo "test-files=$json_array" >> "$GITHUB_OUTPUT"
 
   test:
