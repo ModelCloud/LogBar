@@ -32,7 +32,7 @@ for _ in pb:
 
 # advanced progress bar usage
 # progress bar with fixed title
-pb = log.pb(range(100)).title("Super Bar:) # <-- set fixed title
+pb = log.pb(range(100)).title("Super Bar:") # <-- set fixed title
 for _ in pb:
     time.sleep(0.1)
 
