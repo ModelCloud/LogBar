@@ -58,9 +58,12 @@ class TestProgress(unittest.TestCase):
 
     def test_title_dynamic_subtitle_dynamic(self):
         pb = log.pb(SAMPLES).manual()
+        count = 1
         for i in pb:
+            log.info(f"random log: {count}")
+            count += 1
             pb.title(f"[TITLE: {i}]").subtitle(f"[SUBTITLE: {i}]").draw()
-            sleep(0.1)
+            sleep(0.2)
 
     def test_range_manual(self):
         pb = log.pb(range(100)).manual()
@@ -68,23 +71,29 @@ class TestProgress(unittest.TestCase):
             pb.draw()
             sleep(0.1)
 
-    def test_range_auto(self):
-        pb = log.pb(range(100))
+    def test_range_auto_int(self):
+        pb = log.pb(100)
+        for _ in pb:
+            sleep(0.1)
+
+    def test_range_auto_dict(self):
+        pb = log.pb({"1": 2, "2": 2})
+
         for _ in pb:
             sleep(0.1)
 
     def test_range_auto_disable_ui_left_steps(self):
-        pb = log.pb(range(100)).set(show_left_steps=False)
+        pb = log.pb(100).set(show_left_steps=False)
         for _ in pb:
             sleep(0.1)
 
     def test_title(self):
-        pb = log.pb(range(100)).title("TITLE: FIXED")
+        pb = log.pb(100).title("TITLE: FIXED")
         for _ in pb:
             sleep(0.1)
 
     def test_title_subtitle(self):
-        pb = log.pb(range(100)).title("[TITLE: FIXED]").manual()
+        pb = log.pb(100).title("[TITLE: FIXED]").manual()
         for _ in pb:
             pb.subtitle(f"[SUBTITLE: FIXED]").draw()
             sleep(0.1)
