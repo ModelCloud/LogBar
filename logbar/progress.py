@@ -17,12 +17,13 @@
 import datetime
 import time
 from enum import Enum
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Union
 from warnings import warn
 
 from . import LogBar
 from .logbar import update_last_pb_instance
 from .terminal import terminal_size
+from .util import auto_iterable
 
 logger = LogBar.shared()
 
@@ -40,7 +41,7 @@ class RenderMode(str, Enum):
 
 
 class ProgressBar:
-    def __init__(self, iterable: Iterable):
+    def __init__(self, iterable: Union[Iterable, int, dict, set]):
         self._iterating = False # state: in init or active iteration
 
         self._render_mode = RenderMode.AUTO
@@ -54,7 +55,9 @@ class ProgressBar:
         self.max_title_len = 0
         self.max_subtitle_len = 0
 
-        self.iterable = iterable
+        # auto convert simple types into iterable
+        auto_iter = auto_iterable(iterable)
+        self.iterable = auto_iter if auto_iter else iterable
 
         self.bar_length = 0
         self.current_iter_step = 0
