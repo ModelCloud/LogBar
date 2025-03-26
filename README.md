@@ -1,6 +1,6 @@
 <div align=center>
 
-<image src="https://github.com/user-attachments/assets/03e77aef-1e56-4975-bde1-cff78a4facd2" width=150 height=150>
+<image src="https://github.com/user-attachments/assets/ce85bc38-6741-4a86-8ca9-71c13c7fc563" width=50%>
 </image>
   <h1>LogBar</h1>
 
