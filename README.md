@@ -60,6 +60,8 @@ for name in pb:
 ## `tqdm` replacement
 Replacing `tqdm` with `logbar` is effortless and most time most pythonic and easier to use while being more powerful in the construction
 
+
+Simple 
 ```py
 # tqdm
 sum = 0
@@ -76,6 +78,7 @@ for n in LogBar.pb(100,000):
   time.sleep(0.1)
 ```
 
+Manul Update
 ```py
 # tqdm, manual update mode
 with tqdm.tqdm(total=len(f.keys())) as pb:
@@ -95,13 +98,6 @@ with LogBar.pb(f.keys()) as pb:
       del x
       pb.render()
 ```
-
-```py
-# tqdm
-for n in tqdm.tqdm(range(100,000)):
-  sum += n
-```
-
 
 # Pending Features
 
