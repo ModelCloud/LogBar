@@ -57,6 +57,52 @@ for name in pb:
     time.sleep(0.1)
 ```
 
+## `tqdm` replacement
+Replacing `tqdm` with `logbar` is effortless and most time most pythonic and easier to use while being more powerful in the construction
+
+```py
+# tqdm
+sum = 0
+for n in tqdm.tqdm(range(1000)):
+  sum += n
+  time.sleep(0.1)
+```
+
+```py
+# logbar
+sum = 0
+for n in LogBar.pb(100,000):
+  sum += n
+  time.sleep(0.1)
+```
+
+```py
+# tqdm, manual update mode
+with tqdm.tqdm(total=len(f.keys())) as pb:
+      for k in f.keys():
+          x = f.get_tensor(k)
+          tensors[k] = x.half()
+          del x
+          pb.update()
+```
+
+```py
+# manual render mode, call ui render manually in each step 
+with LogBar.pb(f.keys()) as pb:
+  for k in pb:
+      x = f.get_tensor(k)
+      tensors[k] = x.half()
+      del x
+      pb.render()
+```
+
+```py
+# tqdm
+for n in tqdm.tqdm(range(100,000)):
+  sum += n
+```
+
+
 # Pending Features
 
 * Multiple Active Progress Bars
