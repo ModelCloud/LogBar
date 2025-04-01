@@ -73,7 +73,7 @@ for n in tqdm.tqdm(range(1000)):
 ```py
 # logbar
 sum = 0
-for n in LogBar.pb(100,000):
+for n in log.pb(100,000):
   sum += n
   time.sleep(0.1)
 ```
@@ -91,7 +91,7 @@ with tqdm.tqdm(total=len(f.keys())) as pb:
 
 ```py
 # manual render mode, call ui render manually in each step 
-with LogBar.pb(f.keys()) as pb:
+with log.pb(f.keys()) as pb:
   for k in pb:
       x = f.get_tensor(k)
       tensors[k] = x.half()
