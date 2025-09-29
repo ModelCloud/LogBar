@@ -170,11 +170,29 @@ class LogBar(logging.Logger):
         self.error = self.error_cls(logger=self)
         self.critical = self.critical_cls(logger=self)
 
+    def _format_message(self, msg, args):
+        """Format a log message similarly to the stdlib logging module."""
+        if not args:
+            return str(msg)
+
+        fmt_args = args
+
+        if len(args) == 1 and isinstance(args[0], dict):
+            fmt_args = args[0]
+
+        if isinstance(msg, str):
+            try:
+                return msg % fmt_args
+            except (TypeError, ValueError):
+                pass
+
+        return str(msg)
+
     def _process(self, level: LEVEL, msg, *args, **kwargs):
         from logbar.progress import ProgressBar
 
         columns, _ = terminal_size()
-        str_msg = str(msg)
+        str_msg = self._format_message(msg, args)
 
         if columns > 0:
             str_msg += " " * (columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))  # -2 for cursor + space between LEVEL and msg

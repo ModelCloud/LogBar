@@ -1,8 +1,11 @@
+import io
 import unittest
+from contextlib import redirect_stdout
 
 from logbar import LogBar
 
 log = LogBar.shared(override_logger=True)
+
 
 class TestProgressBar(unittest.TestCase):
 
@@ -19,3 +22,11 @@ class TestProgressBar(unittest.TestCase):
         log.warn("hello warn")
         log.error("hello error")
         log.critical("hello critical")
+
+    def test_percent_formatting(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            log.info("%d", 123)
+
+        output = buffer.getvalue()
+        self.assertIn("123", output)
