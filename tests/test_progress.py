@@ -116,3 +116,16 @@ class TestProgress(unittest.TestCase):
         rendered_line = output.lstrip('\r')
 
         self.assertEqual(len(rendered_line), columns)
+
+    def test_draw_without_terminal_state(self):
+        pb = log.pb(10).manual()
+        pb.current_iter_step = 5
+
+        with patch('logbar.terminal.shutil.get_terminal_size', side_effect=OSError()), \
+             patch.dict('logbar.terminal.os.environ', {}, clear=True):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        output = buffer.getvalue()
+        self.assertIn('[5/10]', output)
