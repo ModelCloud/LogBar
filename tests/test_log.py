@@ -3,6 +3,7 @@ from contextlib import redirect_stdout
 import unittest
 from unittest import mock
 
+
 from logbar import LogBar
 
 log = LogBar.shared(override_logger=True)
