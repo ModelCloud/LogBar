@@ -143,7 +143,14 @@ class ProgressBar:
         if self._subtitle and len(self._subtitle) < self.max_subtitle_len:
             padding += " " * (self.max_subtitle_len - len(self._subtitle))
 
-        bar_length = columns - pre_bar_size - len(log) - 3 # bar|_ == 2 chars + 1 char for cursor
+        # Allocate space for the progress bar itself. The visual output consists of the
+        # content before the bar (title, subtitle, step counter), the bar, and the
+        # trailing "| " separator plus the textual log. The separator is two
+        # characters wide, so we only need to subtract those two characters from the
+        # available columns. Subtracting an extra character caused the rendered line
+        # to fall short of the terminal width which was noticeable when resizing the
+        # terminal window.
+        bar_length = columns - pre_bar_size - len(log) - 2
 
         filled_length = int(bar_length * self.step() // len(self))
         bar = self._fill * filled_length + '-' * (bar_length - filled_length)

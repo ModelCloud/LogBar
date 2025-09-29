@@ -15,7 +15,10 @@
 # limitations under the License.
 
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from time import sleep
+from unittest.mock import patch
 
 from logbar import LogBar
 
@@ -97,3 +100,19 @@ class TestProgress(unittest.TestCase):
         for _ in pb:
             pb.subtitle(f"[SUBTITLE: FIXED]").draw()
             sleep(0.1)
+
+    def test_draw_respects_terminal_width(self):
+        pb = log.pb(100).title("TITLE").subtitle("SUBTITLE").manual()
+        pb.current_iter_step = 50
+
+        columns = 120
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        output = buffer.getvalue()
+        self.assertTrue(output.startswith('\r'))
+        rendered_line = output.lstrip('\r')
+
+        self.assertEqual(len(rendered_line), columns)
