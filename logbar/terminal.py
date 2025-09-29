@@ -1,6 +1,6 @@
 # adapted from github.com/onsim/shutils
 import os
-import sys
+import shutil
 
 
 def terminal_size(fallback=(80, 24)):
@@ -11,8 +11,7 @@ def terminal_size(fallback=(80, 24)):
     the value is a positive integer, it is used.
 
     When COLUMNS or LINES is not defined, which is the common case,
-    the terminal connected to sys.__stdout__ is queried
-    by invoking os.get_terminal_size.
+    shutil.get_terminal_size is used to determine the current terminal size.
 
     If the terminal size cannot be successfully queried, either because
     the system doesn't support querying, or because we are not
@@ -36,10 +35,11 @@ def terminal_size(fallback=(80, 24)):
     # only query if necessary
     if columns <= 0 or lines <= 0:
         try:
-            size = os.get_terminal_size(sys.__stdout__.fileno())
-        except (AttributeError, ValueError, OSError):
-            # stdout is None, closed, detached, or not a terminal, or
-            # os.get_terminal_size() is unsupported
+            size = shutil.get_terminal_size(fallback)
+        except (OSError, ValueError):
+            # shutil.get_terminal_size failed because the runtime does not have an
+            # attached terminal. Fall back to the provided default which mirrors
+            # the behaviour of shutil.get_terminal_size when a fallback is supplied.
             size = os.terminal_size(fallback)
         if columns <= 0:
             columns = size.columns or fallback[0]
