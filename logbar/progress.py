@@ -150,11 +150,11 @@ class ProgressBar:
         # available columns. Subtracting an extra character caused the rendered line
         # to fall short of the terminal width which was noticeable when resizing the
         # terminal window.
-        bar_length = columns - pre_bar_size - len(log) - 2
+        bar_length = max(0, columns - pre_bar_size - len(log) - 2)
 
         filled_length = int(bar_length * self.step() // len(self))
         bar = self._fill * filled_length + '-' * (bar_length - filled_length)
-        self.log(bar=bar, log=log, pre_bar_padding=padding, end='') # '\n' if percent_num >= 1.0 else ''
+        self.log(bar=bar, log=log, pre_bar_padding=padding, end='', columns=columns) # '\n' if percent_num >= 1.0 else ''
 
     def calc_time(self, iteration):
         used_time = int(time.time() - self.time)
@@ -162,7 +162,7 @@ class ProgressBar:
         remaining = str(datetime.timedelta(seconds=int((used_time / max(iteration, 1)) * len(self))))
         return f"{formatted_time} / {remaining}"
 
-    def log(self, bar:str, log:str, pre_bar_padding:str = "", end: str = ""):
+    def log(self, bar:str, log:str, pre_bar_padding:str = "", end: str = "", columns: Optional[int] = None):
         out = ""
         if self._title:
             out += self._title + " "
@@ -177,6 +177,12 @@ class ProgressBar:
             out += self.ui_show_left_steps_text
 
         out += f"{bar}| {log}"
+
+        if columns is not None:
+            if len(out) > columns:
+                out = out[:columns]
+            elif len(out) < columns:
+                out = out + " " * (columns - len(out))
 
         print(f'\r{out}', end=end, flush=True)
 
