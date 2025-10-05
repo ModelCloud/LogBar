@@ -25,6 +25,22 @@ class ColumnSpec:
 class ColumnsPrinter:
     """Helper that formats rows into aligned columns using `LogBar`."""
 
+    class _LevelProxy:
+        """Expose level-specific helpers such as `cols.info.header()`."""
+
+        def __init__(self, printer: "ColumnsPrinter", level: Any) -> None:
+            self._printer = printer
+            self._level = level
+
+        def __call__(self, *values: Any) -> str:
+            return self._printer._log_values(self._level, values)
+
+        def header(self) -> str:
+            return self._printer._log_header(self._level)
+
+        def headers(self) -> str:
+            return self.header()
+
     def __init__(
         self,
         logger: Any,
@@ -48,6 +64,7 @@ class ColumnsPrinter:
         self._level_enum = level_enum
         self._level_max_length = level_max_length
         self._terminal_size = terminal_size_provider or terminal_size
+        self._level_proxies: Dict[Any, ColumnsPrinter._LevelProxy] = {}
 
         if headers:
             self._set_columns(headers)
@@ -118,8 +135,32 @@ class ColumnsPrinter:
 
         return self
 
-    def render(self, level: Optional[Any] = None):
-        level = level or self._level_enum.INFO
+    def _level_proxy(self, level: Any) -> "ColumnsPrinter._LevelProxy":
+        if level not in self._level_proxies:
+            self._level_proxies[level] = ColumnsPrinter._LevelProxy(self, level)
+        return self._level_proxies[level]
+
+    @property
+    def debug(self) -> "ColumnsPrinter._LevelProxy":
+        return self._level_proxy(self._level_enum.DEBUG)
+
+    @property
+    def info(self) -> "ColumnsPrinter._LevelProxy":
+        return self._level_proxy(self._level_enum.INFO)
+
+    @property
+    def warn(self) -> "ColumnsPrinter._LevelProxy":
+        return self._level_proxy(self._level_enum.WARN)
+
+    @property
+    def error(self) -> "ColumnsPrinter._LevelProxy":
+        return self._level_proxy(self._level_enum.ERROR)
+
+    @property
+    def critical(self) -> "ColumnsPrinter._LevelProxy":
+        return self._level_proxy(self._level_enum.CRITICAL)
+
+    def _log_header(self, level: Any) -> str:
         if not self._columns:
             return ""
 
@@ -129,21 +170,6 @@ class ColumnsPrinter:
         self._print_row(level, row)
         self._emit_border(level, force=True)
         return row
-
-    def info(self, *values):
-        return self._log_values(self._level_enum.INFO, values)
-
-    def debug(self, *values):
-        return self._log_values(self._level_enum.DEBUG, values)
-
-    def warn(self, *values):
-        return self._log_values(self._level_enum.WARN, values)
-
-    def error(self, *values):
-        return self._log_values(self._level_enum.ERROR, values)
-
-    def critical(self, *values):
-        return self._log_values(self._level_enum.CRITICAL, values)
 
     def _log_values(self, level: Any, values: Iterable) -> str:
         values_list = self._prepare_values(values)

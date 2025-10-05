@@ -35,16 +35,16 @@ def test_columns_auto_expand(capsys):
         info_calls = 0
 
         with capsys.disabled():
-            last_header = cols.render()
+            last_header = cols.info.header()
             while time.time() - start < 2.5:
                 cols.info(*rows[idx % len(rows)])
                 info_calls += 1
                 idx += 1
                 if info_calls % 5 == 0:
-                    last_header = cols.render()
+                    last_header = cols.info.header()
                 time.sleep(0.2)
 
-            last_header = cols.render()
+            last_header = cols.info.header()
 
     cols_widths = cols.widths
     assert cols_widths[0] >= len(longest_name)
@@ -105,10 +105,13 @@ def test_columns_support_other_levels(capsys):
     with mock.patch('logbar.logbar.terminal_size', return_value=(0, 0)):
         with capsys.disabled():
             with redirect_stdout(Tee()):
-                cols.render()
+                cols.debug.header()
                 cols.debug("debug", "10")
+                cols.warn.header()
                 cols.warn("warn", "20")
+                cols.error.header()
                 cols.error("error", "30")
+                cols.critical.header()
                 cols.critical("critical", "40")
 
     captured = _clean(buffer.getvalue())
@@ -144,7 +147,7 @@ def test_columns_initial_width_distribution(capsys):
         with redirect_stdout(buffer):
             cols.update({"school": {"width": "40%"}})
             target = cols.width()
-            cols.render()
+            cols.info.header()
 
     widths = cols.widths
     assert len(widths) == 3
@@ -174,7 +177,7 @@ def test_columns_respects_available_width():
         cols = log.columns(cols=("c1", "c2", "c3", "c4"))
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            cols.render()
+            cols.info.header()
 
     cleaned = _clean(buffer.getvalue())
     header_lines = [line for line in cleaned.splitlines() if '|  c1' in line]
@@ -190,10 +193,10 @@ def test_columns_fit_width_matches_content():
     cols = log.columns(cols=({"label": "tag", "width": "FiT"}, {"label": "message"}))
 
     with mock.patch('logbar.logbar.terminal_size', return_value=(100, 24)):
-        cols.render()
+        cols.info.header()
         cols.info("ok", "short message")
         cols.info("verylongtagname", "another message")
-        cols.render()
+        cols.info.header()
 
     widths = cols.widths
     assert widths[0] == len("verylongtagname")
