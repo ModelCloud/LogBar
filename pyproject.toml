@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "LogBar"
-dynamic = ["version"]
+version = "0.0.6"
 description = "A unified Logger and ProgressBar util with zero dependencies."
 readme = "README.md"
 requires-python = ">=3"
@@ -34,6 +34,3 @@ Homepage = "https://github.com/ModelCloud/LogBar"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["logbar*"]
-
-[tool.setuptools.dynamic]
-version = { attr = "logbar.__version__" }
