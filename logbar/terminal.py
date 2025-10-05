@@ -8,6 +8,7 @@ import os
 import shutil
 
 
+
 def terminal_size(fallback=(80, 24)):
     """Get the size of the terminal window.
 

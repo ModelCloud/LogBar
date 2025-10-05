@@ -71,7 +71,13 @@ class ColumnsPrinter:
             )
         if self._current_total_width is not None:
             return self._current_total_width
-        return self._get_target_width()
+
+        separator_count = 0
+        slot_count = self._slot_count()
+        if slot_count:
+            separator_count = slot_count + 1
+
+        return self._get_target_width() + separator_count
 
     def update(self, updates: Dict[str, Dict[str, Any]]):
         if not updates:
@@ -248,21 +254,33 @@ class ColumnsPrinter:
         if term_cols <= 0:
             term_cols = 80
 
-        available = max(0, term_cols - (self._level_max_length + 2))
+        slot_count = self._slot_count()
+        separator_count = slot_count + 1 if slot_count else 0
+
+        available_total = max(0, term_cols - (self._level_max_length + 2))
 
         if hint:
             if hint[0] == "percent":
-                target = int(available * hint[1])
+                target_total = int(available_total * hint[1])
             else:
-                target = int(hint[1])
+                target_total = int(hint[1])
         else:
-            target = available
+            target_total = available_total
 
-        minimal = self._minimal_width()
-        if target <= 0:
-            target = minimal
+        minimal_total = self._minimal_width()
+        if target_total <= 0:
+            target_total = minimal_total
 
-        return max(target, minimal)
+        target_total = max(target_total, minimal_total)
+
+        if separator_count:
+            minimal_cells = max(0, minimal_total - separator_count)
+            target_cells = max(0, target_total - separator_count)
+        else:
+            minimal_cells = minimal_total
+            target_cells = target_total
+
+        return max(target_cells, minimal_cells)
 
     def _apply_initial_widths(self) -> None:
         slot_count = self._slot_count()
@@ -297,7 +315,10 @@ class ColumnsPrinter:
                 self._grow_column(col_idx, 1)
                 remaining -= 1
 
-        self._current_total_width = sum(self._column_total_width(idx) for idx in range(column_count))
+        slot_count = self._slot_count()
+        separator_count = slot_count + 1 if slot_count else 0
+        current_total = sum(self._column_total_width(idx) for idx in range(column_count))
+        self._current_total_width = current_total + separator_count
 
     def _resolve_width_hint(self, hint: Optional[Tuple[str, float]], total_width: int) -> Optional[int]:
         if not hint:
