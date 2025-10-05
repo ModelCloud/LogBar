@@ -186,7 +186,15 @@ def test_columns_respects_available_width():
 
     row_segment = header_line[header_line.index('|'):]
     expected = columns - (cols._level_max_length + 2)
-    assert len(row_segment) == expected
+    segment_len = len(row_segment)
+    content_segment = row_segment[: row_segment.rfind('|') + 1]
+    slot_widths = cols.widths
+    computed_len = len(slot_widths) + 1  # separators
+    for width in slot_widths:
+        computed_len += (cols.padding * 2) + width
+    assert len(content_segment) == computed_len
+    assert segment_len == expected
+    assert len(content_segment) < expected
 
 
 def test_columns_fit_width_matches_content():

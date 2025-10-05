@@ -331,12 +331,11 @@ class ColumnsPrinter:
             self._configure_column_width(col_idx, target)
 
         current_total = sum(self._column_total_width(idx) for idx in range(column_count))
-        has_fit = any(spec.width and spec.width[0] == "fit" for spec in self._columns)
         has_percent = any(spec.width and spec.width[0] == "percent" for spec in self._columns)
         if current_total > total_width:
             total_width = current_total
 
-        if has_fit and not self._target_width_hint and not has_percent:
+        if not self._target_width_hint and not has_percent:
             total_width = current_total
 
         remaining = max(0, total_width - current_total)
@@ -348,19 +347,20 @@ class ColumnsPrinter:
                 if spec.width is None or (spec.width and spec.width[0] != "fit")
             ]
 
-        while remaining > 0 and expandable:
-            progressed = False
-            for col_idx in expandable:
-                if remaining <= 0:
+        if remaining > 0 and expandable:
+            while remaining > 0:
+                progressed = False
+                for col_idx in expandable:
+                    if remaining <= 0:
+                        break
+                    spec = self._columns[col_idx]
+                    if spec.width and spec.width[0] == "fit":
+                        continue
+                    self._grow_column(col_idx, 1)
+                    remaining -= 1
+                    progressed = True
+                if not progressed:
                     break
-                spec = self._columns[col_idx]
-                if spec.width and spec.width[0] == "fit":
-                    continue
-                self._grow_column(col_idx, 1)
-                remaining -= 1
-                progressed = True
-            if not progressed:
-                break
 
         slot_count = self._slot_count()
         separator_count = slot_count + 1 if slot_count else 0
