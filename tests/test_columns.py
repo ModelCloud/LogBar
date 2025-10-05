@@ -166,3 +166,21 @@ def test_columns_width_setter_removed():
     cols = log.columns(cols=("name", "age"))
     with pytest.raises(TypeError):
         cols.width("50%")
+
+
+def test_columns_respects_available_width():
+    columns = 120
+    with mock.patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
+        cols = log.columns(cols=("c1", "c2", "c3", "c4"))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            cols.render()
+
+    cleaned = _clean(buffer.getvalue())
+    header_lines = [line for line in cleaned.splitlines() if '|  c1' in line]
+    assert header_lines
+    header_line = header_lines[0]
+
+    row_segment = header_line[header_line.index('|'):]
+    expected = columns - (cols._level_max_length + 2)
+    assert len(row_segment) == expected
