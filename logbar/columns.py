@@ -58,6 +58,9 @@ class ColumnsPrinter:
         def __call__(self, *values: Any) -> str:
             return self._printer._log_values(self._level, values)
 
+        def simulate(self, *values: Any) -> None:
+            self._printer._simulate_values(self._level, values)
+
         def header(self) -> str:
             return self._printer._log_header(self._level)
 
@@ -202,6 +205,10 @@ class ColumnsPrinter:
         self._print_row(level, row)
         self._emit_border(level, force=True)
         return row
+
+    def _simulate_values(self, level: Any, values: Iterable) -> None:
+        values_list = self._prepare_values(values)
+        self._update_slot_widths(values_list)
 
     def _set_columns(self, headers: Sequence) -> None:
         self._columns = [self._normalize_column(entry) for entry in headers]

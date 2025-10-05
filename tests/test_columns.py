@@ -87,6 +87,22 @@ def test_columns_reject_tuple_entries():
         log.columns(cols=(("name", 2), "age"))
 
 
+def test_columns_simulate_updates_width_without_output():
+    cols = log.columns(cols=("name", "details"))
+
+    long_value = "longer than anything real"
+
+    with mock.patch.object(cols._logger, "_process") as mocked:
+        cols.info.simulate(long_value, "ok")
+        mocked.assert_not_called()
+
+    cols.info("short", "value")
+
+    widths = cols.widths
+    assert widths
+    assert widths[0] >= len(long_value)
+
+
 def test_columns_support_other_levels(capsys):
     cols = log.columns(cols=("name", "age"))
 
