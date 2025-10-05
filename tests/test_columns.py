@@ -142,7 +142,7 @@ def test_columns_initial_width_distribution(capsys):
 
     with mock.patch('logbar.logbar.terminal_size', return_value=(100, 24)):
         with redirect_stdout(buffer):
-            cols.width("50%")
+            cols.update({"school": {"width": "40%"}})
             target = cols.width()
             cols.render()
 
@@ -153,9 +153,16 @@ def test_columns_initial_width_distribution(capsys):
 
     specs = cols.column_specs
     assert specs[0].width == ('percent', 0.1)
+    assert specs[1].width == ('percent', 0.4)
 
     header_lines = [line for line in _clean(buffer.getvalue()).splitlines() if 'name' in line]
     assert header_lines
     header_len = len(header_lines[0].strip())
     assert header_len >= target * 0.8  # allow padding adjustments
     assert header_len <= 100  # should not exceed mocked terminal width
+
+
+def test_columns_width_setter_removed():
+    cols = log.columns(cols=("name", "age"))
+    with pytest.raises(TypeError):
+        cols.width("50%")

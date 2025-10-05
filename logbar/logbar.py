@@ -328,14 +328,51 @@ class ColumnsPrinter:
         return [ColumnSpec(spec.label, spec.span, spec.width) for spec in self._columns]
 
     def width(self, width: Optional[Union[str, int, float]] = None):
-        if width is None:
-            if self._current_total_width is not None:
-                return self._current_total_width
-            return self._get_target_width()
+        if width is not None:
+            raise TypeError(
+                "ColumnsPrinter.width no longer accepts arguments; use ColumnsPrinter.update instead."
+            )
+        if self._current_total_width is not None:
+            return self._current_total_width
+        return self._get_target_width()
 
-        self._target_width_hint = self._parse_width_hint(width)
-        self._apply_initial_widths()
-        self._apply_header_widths()
+    def update(self, updates: dict):
+        if not updates:
+            return self
+
+        modified = False
+        for label, attrs in updates.items():
+            spec_index = next((idx for idx, spec in enumerate(self._columns) if spec.label == label), None)
+            if spec_index is None:
+                raise KeyError(f"Unknown column label: {label!r}")
+
+            spec = self._columns[spec_index]
+            new_label = spec.label
+            new_span = spec.span
+            new_width = spec.width
+
+            if not isinstance(attrs, dict):
+                raise TypeError(
+                    "Update values must be dictionaries mapping attribute names to values."
+                )
+
+            if "label" in attrs:
+                new_label = str(attrs["label"]) if attrs["label"] is not None else ""
+
+            if "span" in attrs:
+                new_span = max(1, int(attrs["span"]))
+
+            if "width" in attrs:
+                new_width = self._parse_width_hint(attrs["width"])
+
+            self._columns[spec_index] = ColumnSpec(label=new_label, span=new_span, width=new_width)
+            modified = True
+
+        if modified:
+            self._recompute_layout()
+            self._apply_initial_widths()
+            self._apply_header_widths()
+
         return self
 
     def render(self, level: Optional[LEVEL] = None):
