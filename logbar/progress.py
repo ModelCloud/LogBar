@@ -169,9 +169,11 @@ class ProgressBar:
             segments_plain.append(text)
             segments_rendered.append(rendered if rendered is not None else text)
 
+        animate_title = self._should_animate_title()
+
         if self._title:
-            if self._should_animate_title():
-                animated_title = self._animated_title()
+            if animate_title:
+                animated_title = self._animated_text(self._title)
                 append_segment(self._title, animated_title)
             else:
                 append_segment(self._title)
@@ -184,7 +186,11 @@ class ProgressBar:
             append_segment(pre_bar_padding)
 
         if self.ui_show_left_steps:
-            append_segment(self.ui_show_left_steps_text)
+            left_steps_text = self.ui_show_left_steps_text
+            if not self._title and animate_title:
+                append_segment(left_steps_text, self._animated_text(left_steps_text))
+            else:
+                append_segment(left_steps_text)
 
         append_segment(f"{bar}| {log}")
 
@@ -204,17 +210,16 @@ class ProgressBar:
 
         update_last_pb_instance(src=self)  # let logger now we logged
 
-    def _animated_title(self) -> str:
-        title = self._title
-        if not title:
+    def _animated_text(self, text: str) -> str:
+        if not text:
             return ""
 
         period = self._title_animation_period
         elapsed = time.time() - self._title_animation_start
-        highlight_idx = int(elapsed / max(period, 1e-6)) % max(len(title), 1)
+        highlight_idx = int(elapsed / max(period, 1e-6)) % max(len(text), 1)
 
         parts = [TITLE_BASE_COLOR]
-        for idx, char in enumerate(title):
+        for idx, char in enumerate(text):
             if idx == highlight_idx:
                 parts.append(TITLE_HIGHLIGHT_COLOR)
                 parts.append(char)
