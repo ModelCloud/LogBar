@@ -66,3 +66,17 @@ class TestProgressBar(unittest.TestCase):
 
             expected = fmt % fmt_args
             self.assertIn(expected, output)
+
+    def test_argument_variants(self):
+        cases = [
+            (("simple string",), "simple string"),
+            (("formated string %d", 123), "formated string 123"),
+            (("multiple args %d, %s", 123, "hello"), "multiple args 123, hello"),
+            (("multiple args %d", 123, "arg2 %s", "hello"), "multiple args 123 arg2 hello"),
+            (("append output", "output2", "output3"), "append output output2 output3"),
+        ]
+
+        for args, expected in cases:
+            with self.subTest(args=args):
+                output = self.capture_log(log.info, *args)
+                self.assertIn(expected, output)

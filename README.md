@@ -4,7 +4,7 @@
 </image>
   <h1>LogBar</h1>
 
-  A unified Logger and ProgressBar util with zero dependencies. 
+  A unified logger, table renderer, and progress bar utility with zero runtime dependencies.
 </div>
 
 <p align="center" >
@@ -12,96 +12,181 @@
     <a href="https://pypi.org/project/logbar/" style="text-decoration:none;"><img alt="PyPI - Version" src="https://img.shields.io/pypi/v/logbar"></a>
     <a href="https://pepy.tech/projects/logbar" style="text-decoration:none;"><img src="https://static.pepy.tech/badge/logbar" alt="PyPI Downloads"></a>
     <a href="https://github.com/ModelCloud/LogBar/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/logbar" alt="License"></a>
-    <a href="https://huggingface.co/modelcloud/"><img src="https://img.shields.io/badge/🤗%20Hugging%20Face-ModelCloud-%23ff8811.svg"></a>
+    <a href="https://huggingface.co/modelcloud/"><img src="https://img.shields.io/badge/Hugging%20Face-ModelCloud-%23ff8811.svg"></a>
 </p>
 
 
 # Features
 
-* `Once` logging: `log.info.once("this log msg will be only logged once")`
-* Progress Bar: `progress_bar = log.pb(100)`
-* Sticky Bottom Progress Bar: Default behavior!
-* Logging and Porgress Bar work hand-in-hand with no conflict: logs are printed before the progress bar
+- Shared singleton logger with per-level colorized output.
+- `once` helpers prevent duplicate log spam automatically.
+- Progress bars that stay at the bottom while your logs flow freely.
+- Column-aware tabular printer with spans, width hints, and `fit` sizing.
+- Zero dependencies; works anywhere Python runs.
 
-# Usage:
+# Installation
 
-```py
-# logs
-log = LogBar.shared() # <-- single global log (optional), shared everywhere
-log.info("super log!")
-log.info.once("Show only once")
-log.info.once("Show only once") # <-- not logged
-
-
-# progress bar
-pb = log.pb(100) # <-- pass in any iterable or int
-for _ in pb:
-    time.sleep(0.1)
-
-# advanced progress bar usage
-# progress bar with fixed title
-pb = log.pb(100).title("Super Bar:") # <-- set fixed title
-for _ in pb:
-    time.sleep(0.1)
-
-
-# advanced progress bar usage
-# progress bar with fixed title and dynamic sub_title
-# dynamic title/sub_title requires manual calls to `draw()` show progress correctly in correct order
-pb = log.pb(names_list).title("Processing Model").manual() # <-- switch to manual render mode: call `draw()` manually
-for name in pb:
-    start = time.time()
-    log.info(f"{name} is about to be worked on...") # <-- logs and progress bar do not conflict
-    pb.subtitle(f"Processing Module: {name}").draw()
-    log.info(f"{name} completed: took {time.time()-start} secs")
-    time.sleep(0.1)
+```bash
+pip install logbar
 ```
 
-## `tqdm` replacement
-Replacing `tqdm` with `logbar` is effortless and most time most pythonic and easier to use while being more powerful in the construction
+LogBar works out-of-the-box with CPython 3.8+ on Linux, macOS, and Windows terminals.
 
+# Quick Start
 
-Simple 
+```py
+import time
+from logbar import LogBar
+
+log = LogBar.shared()
+
+log.info("hello from logbar")
+log.info.once("this line shows once")
+log.info.once("this line shows once")  # silently skipped
+
+for _ in log.pb(range(5)):
+    time.sleep(0.2)
+```
+
+Sample output (colors omitted in plain-text view):
+
+```
+INFO  hello from logbar
+INFO  this line shows once
+INFO  [###---------------]  20%  (1/5)
+```
+
+# Logging
+
+The shared instance exposes the standard level helpers plus `once` variants:
+
+```py
+log.debug("details...")
+log.warn("disk space is low")
+log.error("cannot connect to database")
+log.critical.once("fuse blown, shutting down")
+```
+
+Typical mixed-level output (Note: Markdown cannot display ANSI colors):
+
+```
+DEBUG model version=v2.9.1
+WARN  disk space is low (5%)
+ERROR cannot connect to database
+CRIT  fuse blown, shutting down
+```
+
+# Progress Bars
+
+Progress bars accept any iterable or integer total:
+
+```py
+for item in log.pb(tasks):
+    process(item)
+
+for _ in log.pb(500).title("Downloading"):
+    time.sleep(0.05)
+```
+
+Manual mode gives full control when you need to interleave logging and redraws:
+
+```py
+pb = log.pb(jobs).title("Processing").manual()
+for job in pb:
+    log.info(f"starting {job}")
+    pb.subtitle(f"in-flight: {job}").draw()
+    run(job)
+    log.info(f"finished {job}")
+```
+
+Progress bar snapshot (plain-text example):
+
+```
+INFO  Processing [##########------------]  40%  (8/20) in-flight: step-8
+```
+
+The bar always re-renders at the bottom, so log lines never overwrite your progress.
+
+# Columns
+
+Use `log.columns(...)` to format aligned tables while logging data streams. Columns support spans and three width hints:
+
+- character width: `"24"`
+- percentage of the available log width: `"30%"`
+- content-driven fit: `"fit"`
+
+```py
+cols = log.columns(
+    {"label": "tag", "width": "fit"},
+    {"label": "duration", "width": 8},
+    {"label": "message", "span": 2}
+)
+
+cols.render()
+cols.info("startup", "1.2s", "ready", "subsystem online")
+cols.info("alignment", "0.5s", "resizing", "fit width active")
+cols.render()
+```
+
+Sample table output (plain-text):
+
+```
+INFO  +----------+----------+-----------------------------+------------------------------+
+INFO  |  tag      |  duration |  message                     |  message                     |
+INFO  +----------+----------+-----------------------------+------------------------------+
+INFO  |  startup  |  1.2s     |  ready                       |  subsystem online            |
+INFO  +----------+----------+-----------------------------+------------------------------+
+INFO  |  alignment|  0.5s     |  resizing                    |  fit width active            |
+INFO  +----------+----------+-----------------------------+------------------------------+
+```
+
+Notice how the `tag` column expands precisely to the longest value thanks to `width="fit"`.
+
+You can update column definitions at runtime:
+
+```py
+cols.update({
+    "message": {"width": "40%"},
+    "duration": {"label": "time"}
+})
+```
+
+# Replacing `tqdm`
+
+The API mirrors common `tqdm` patterns while staying more Pythonic:
+
 ```py
 # tqdm
-sum = 0
 for n in tqdm.tqdm(range(1000)):
-  sum += n
-  time.sleep(0.1)
-```
+    consume(n)
 
-```py
 # logbar
-sum = 0
-for n in log.pb(100,000):
-  sum += n
-  time.sleep(0.1)
+for n in log.pb(range(1000)):
+    consume(n)
 ```
 
-Manul Update
-```py
-# tqdm, manual update mode
-with tqdm.tqdm(total=len(f.keys())) as pb:
-      for k in f.keys():
-          x = f.get_tensor(k)
-          tensors[k] = x.half()
-          del x
-          pb.update()
-```
+Manual update comparison:
 
 ```py
-# manual render mode, call ui render manually in each step 
-with log.pb(f.keys()) as pb:
-  for k in pb:
-      x = f.get_tensor(k)
-      tensors[k] = x.half()
-      del x
-      pb.render()
+# tqdm manual mode
+with tqdm.tqdm(total=len(items)) as pb:
+    for item in items:
+        handle(item)
+        pb.update()
+
+# logbar manual redraw
+with log.pb(items).manual() as pb:
+    for item in pb:
+        handle(item)
+        pb.render()
 ```
+
+# Advanced Tips
+
+- Combine columns and progress bars by logging summaries at key checkpoints.
+- Use `log.warn.once(...)` to keep noisy health checks readable.
+- For multi-line messages, pre-format text and pass it as a single string; LogBar keeps borders intact.
 
 # Pending Features
 
-* Multiple Active Progress Bars
-
-
-
+- Multiple active progress bars

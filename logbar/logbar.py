@@ -1,28 +1,19 @@
-# Copyright 2024-2025 ModelCloud.ai
-# Copyright 2024-2025 qubitium@modelcloud.ai
+# SPDX-FileCopyrightText: 2024-2025 ModelCloud.ai
+# SPDX-FileCopyrightText: 2024-2025 qubitium@modelcloud.ai
+# SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import logging
 from enum import Enum
-from typing import Optional, Iterable
+from typing import Iterable, Optional, Sequence, Union
 
 from .terminal import terminal_size
+from .columns import ColumnSpec, ColumnsPrinter
 
 # global static/shared logger instance
 logger = None
 last_pb_instance = None # one for logger, 2 for progressbar
+last_rendered_length = 0
 
 def update_last_pb_instance(src) -> None:
     global last_pb_instance
@@ -170,32 +161,104 @@ class LogBar(logging.Logger):
         self.error = self.error_cls(logger=self)
         self.critical = self.critical_cls(logger=self)
 
+    def columns(self, *headers, cols: Optional[Sequence] = None, width: Optional[Union[str, int, float]] = None, padding: int = 2):
+        """Return a column-aware helper that keeps column widths aligned."""
+
+        header_defs: Optional[Sequence] = None
+
+        if cols is not None:
+            if isinstance(cols, (str, bytes)):
+                header_defs = [cols]
+            elif isinstance(cols, Iterable):
+                header_defs = list(cols)
+            else:
+                header_defs = [cols]
+        elif headers:
+            if len(headers) == 1 and isinstance(headers[0], Iterable) and not isinstance(headers[0], (str, bytes)):
+                header_defs = list(headers[0])
+            else:
+                header_defs = list(headers)
+
+        return ColumnsPrinter(
+            logger=self,
+            headers=header_defs,
+            padding=padding,
+            width_hint=width,
+            level_enum=LEVEL,
+            level_max_length=LEVEL_MAX_LENGTH,
+            terminal_size_provider=lambda: terminal_size(),
+        )
+
     def _format_message(self, msg, args):
-        """Format a log message similarly to the stdlib logging module."""
+        """Format a log message while gracefully handling extra positional args."""
         if not args:
             return str(msg)
 
-        fmt_args = args
+        remaining = list(args)
+        parts = []
 
-        if len(args) == 1 and isinstance(args[0], dict):
-            fmt_args = args[0]
+        def consume_format(fmt, available):
+            if not isinstance(fmt, str):
+                return str(fmt), 0
 
-        if isinstance(msg, str):
-            try:
-                return msg % fmt_args
-            except (TypeError, ValueError):
-                pass
+            if not available:
+                return str(fmt), 0
 
-        return str(msg)
+            if len(available) == 1 and isinstance(available[0], dict):
+                try:
+                    return fmt % available[0], 1
+                except (TypeError, ValueError, KeyError):
+                    return str(fmt), 0
+
+            for end in range(len(available), 0, -1):
+                subset = tuple(available[:end])
+                try:
+                    return fmt % subset, end
+                except (TypeError, ValueError, KeyError):
+                    continue
+
+            return str(fmt), 0
+
+        current = msg
+        while True:
+            formatted, consumed = consume_format(current, remaining)
+            parts.append(formatted)
+            if consumed:
+                remaining = remaining[consumed:]
+
+            if not remaining:
+                break
+
+            next_candidate = remaining[0]
+            if isinstance(next_candidate, str) and '%' in next_candidate:
+                current = remaining.pop(0)
+                continue
+
+            break
+
+        if remaining:
+            parts.extend(str(arg) for arg in remaining)
+
+        return " ".join(part for part in parts if part)
 
     def _process(self, level: LEVEL, msg, *args, **kwargs):
         from logbar.progress import ProgressBar
 
+        global last_rendered_length
         columns, _ = terminal_size()
         str_msg = self._format_message(msg, args)
 
+        line_length = len(level.value) + (LEVEL_MAX_LENGTH - len(level.value)) + 1 + len(str_msg)
+
         if columns > 0:
-            str_msg += " " * (columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))  # -2 for cursor + space between LEVEL and msg
+            padding_needed = max(0, columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))
+            str_msg += " " * padding_needed  # -2 for cursor + space between LEVEL and msg
+            printable_length = columns
+            last_rendered_length = printable_length
+        else:
+            printable_length = line_length
+            if last_rendered_length > printable_length:
+                str_msg += " " * (last_rendered_length - printable_length)
 
         global last_pb_instance
         if isinstance(last_pb_instance, ProgressBar) and not last_pb_instance.closed:
@@ -208,6 +271,9 @@ class LogBar(logging.Logger):
 
         level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
         print(f"\r{color}{level.value}{reset}{level_padding} {str_msg}", end='\n', flush=True)
+
+        if columns <= 0:
+            last_rendered_length = printable_length
 
         if isinstance(last_pb_instance, ProgressBar):
             if not last_pb_instance.closed:

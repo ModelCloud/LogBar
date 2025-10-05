@@ -1,20 +1,10 @@
-# Copyright 2024-2025 ModelCloud.ai
-# Copyright 2024-2025 qubitium@modelcloud.ai
+# SPDX-FileCopyrightText: 2024-2025 ModelCloud.ai
+# SPDX-FileCopyrightText: 2024-2025 qubitium@modelcloud.ai
+# SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import datetime
+import sys
 import time
 from enum import Enum
 from typing import Iterable, Optional, Union
@@ -26,6 +16,12 @@ from .terminal import terminal_size
 from .util import auto_iterable
 
 logger = LogBar.shared()
+
+# ANSI helpers for the animated title effect
+ANSI_RESET = "\033[0m"
+ANSI_BOLD_RESET = "\033[22m"
+TITLE_BASE_COLOR = "\033[38;5;250m"
+TITLE_HIGHLIGHT_COLOR = "\033[1m\033[38;5;15m"
 
 # TODO FIXME: what does this do exactly?
 class ProgressBarWarning(Warning):
@@ -62,6 +58,8 @@ class ProgressBar:
         self.bar_length = 0
         self.current_iter_step = 0
         self.time = time.time()
+        self._title_animation_start = self.time
+        self._title_animation_period = 0.1
 
         self.ui_show_left_steps = True # show [1 of 100] on left side
         self.ui_show_left_steps_offset = 0
@@ -89,6 +87,7 @@ class ProgressBar:
             self.max_title_len = len(title)
 
         self._title = title
+        self._title_animation_start = time.time()
         return self
 
     def subtitle(self, subtitle: str):
@@ -163,30 +162,109 @@ class ProgressBar:
         return f"{formatted_time} / {remaining}"
 
     def log(self, bar:str, log:str, pre_bar_padding:str = "", end: str = "", columns: Optional[int] = None):
-        out = ""
+        segments_plain = []
+        segments_rendered = []
+
+        def append_segment(text: str, rendered: Optional[str] = None):
+            segments_plain.append(text)
+            segments_rendered.append(rendered if rendered is not None else text)
+
+        animate_title = self._should_animate_title()
+
         if self._title:
-            out += self._title + " "
+            if animate_title:
+                animated_title = self._animated_text(self._title)
+                append_segment(self._title, animated_title)
+            else:
+                append_segment(self._title)
+            append_segment(" ")
 
         if self._subtitle:
-            out += self._subtitle + " "
+            append_segment(self._subtitle + " ")
 
         if pre_bar_padding:
-            out += pre_bar_padding
+            append_segment(pre_bar_padding)
 
         if self.ui_show_left_steps:
-            out += self.ui_show_left_steps_text
+            left_steps_text = self.ui_show_left_steps_text
+            if not self._title and animate_title:
+                append_segment(left_steps_text, self._animated_text(left_steps_text))
+            else:
+                append_segment(left_steps_text)
 
-        out += f"{bar}| {log}"
+        append_segment(f"{bar}| {log}")
+
+        plain_out = ''.join(segments_plain)
+        rendered_out = ''.join(segments_rendered)
 
         if columns is not None:
-            if len(out) > columns:
-                out = out[:columns]
-            elif len(out) < columns:
-                out = out + " " * (columns - len(out))
+            if len(plain_out) > columns:
+                plain_out = plain_out[:columns]
+                rendered_out = self._truncate_ansi(rendered_out, columns)
+            elif len(plain_out) < columns:
+                pad = " " * (columns - len(plain_out))
+                plain_out += pad
+                rendered_out += pad
 
-        print(f'\r{out}', end=end, flush=True)
+        print(f'\r{rendered_out}', end=end, flush=True)
 
         update_last_pb_instance(src=self)  # let logger now we logged
+
+    def _animated_text(self, text: str) -> str:
+        if not text:
+            return ""
+
+        period = self._title_animation_period
+        elapsed = time.time() - self._title_animation_start
+        highlight_idx = int(elapsed / max(period, 1e-6)) % max(len(text), 1)
+
+        parts = [TITLE_BASE_COLOR]
+        for idx, char in enumerate(text):
+            if idx == highlight_idx:
+                parts.append(TITLE_HIGHLIGHT_COLOR)
+                parts.append(char)
+                parts.append(ANSI_BOLD_RESET)
+                parts.append(TITLE_BASE_COLOR)
+            else:
+                parts.append(char)
+
+        parts.append(ANSI_RESET)
+        return ''.join(parts)
+
+    def _truncate_ansi(self, text: str, limit: int) -> str:
+        if limit <= 0:
+            # ensure we reset styles even if nothing is shown
+            return ANSI_RESET
+
+        result = []
+        printable = 0
+        i = 0
+        while i < len(text) and printable < limit:
+            char = text[i]
+            if char == '\033':
+                end = i + 1
+                while end < len(text) and text[end] != 'm':
+                    end += 1
+                end = min(end + 1, len(text))
+                result.append(text[i:end])
+                i = end
+                continue
+
+            result.append(char)
+            printable += 1
+            i += 1
+
+        # ensure the terminal color state is restored even if we sliced mid-sequence
+        if printable >= limit:
+            result.append(ANSI_RESET)
+
+        return ''.join(result)
+
+    def _should_animate_title(self) -> bool:
+        isatty = getattr(sys.stdout, "isatty", None)
+        if not callable(isatty):
+            return False
+        return bool(isatty())
 
     def __bool__(self):
         if self.iterable is None:
