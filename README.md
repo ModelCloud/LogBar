@@ -109,7 +109,7 @@ The bar always re-renders at the bottom, so log lines never overwrite your progr
 
 # Columns
 
-Use `log.columns(...)` to format aligned tables while logging data streams. Columns support spans and three width hints:
+Use `log.columns(...)` to format aligned tables while logging data streams. Print the column header per context with `cols.info.header()` (or `cols.warn.header()`, etc.). Columns support spans and three width hints:
 
 - character width: `"24"`
 - percentage of the available log width: `"30%"`
@@ -122,10 +122,9 @@ cols = log.columns(
     {"label": "message", "span": 2}
 )
 
-cols.render()
+cols.info.header()
 cols.info("startup", "1.2s", "ready", "subsystem online")
 cols.info("alignment", "0.5s", "resizing", "fit width active")
-cols.render()
 ```
 
 Sample table output (plain-text):
