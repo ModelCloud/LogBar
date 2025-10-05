@@ -472,11 +472,13 @@ class ColumnsPrinter:
         if not force and self._last_was_border:
             return
 
-        pad = self._padding * 2
         segments = []
-        for width in self._slot_widths:
+        for idx, width in enumerate(self._slot_widths):
             base = max(1, width)
-            segments.append("-" * (base + pad))
+            padding = self._padding
+            if idx < len(self._slot_padding):
+                padding = max(0, self._slot_padding[idx])
+            segments.append("-" * (base + (padding * 2)))
 
         border = "+" + "+".join(segments) + "+"
         self._logger._process(level, border)
