@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "LogBar"
@@ -31,6 +31,12 @@ dependencies = []
 [project.urls]
 Homepage = "https://github.com/ModelCloud/LogBar"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["logbar*"]
+[tool.hatch.build.targets.wheel]
+packages = ["logbar"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "LICENSE",
+    "README.md",
+    "logbar",
+]
