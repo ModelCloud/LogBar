@@ -107,7 +107,7 @@ INFO  Processing [##########------------]  40%  (8/20) in-flight: step-8
 
 The bar always re-renders at the bottom, so log lines never overwrite your progress.
 
-# Columns
+# Columns (Table) 
 
 Use `log.columns(...)` to format aligned tables while logging data streams. Print the column header per context with `cols.info.header()` (or `cols.warn.header()`, etc.). Columns support spans and three width hints:
 
@@ -131,11 +131,11 @@ Sample table output (plain-text):
 
 ```
 INFO  +----------+----------+-----------------------------+------------------------------+
-INFO  |  tag      |  duration |  message                     |  message                     |
+INFO  |  tag      |  duration |  message                     |  message                  |
 INFO  +----------+----------+-----------------------------+------------------------------+
-INFO  |  startup  |  1.2s     |  ready                       |  subsystem online            |
+INFO  |  startup  |  1.2s     |  ready                       |  subsystem online         |
 INFO  +----------+----------+-----------------------------+------------------------------+
-INFO  |  alignment|  0.5s     |  resizing                    |  fit width active            |
+INFO  |  alignment|  0.5s     |  resizing                    |  fit width active         |
 INFO  +----------+----------+-----------------------------+------------------------------+
 ```
 
