@@ -15,8 +15,9 @@
 # limitations under the License.
 
 import logging
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Iterable, List
+from typing import Optional, Iterable, List, Sequence
 
 from .terminal import terminal_size
 
@@ -24,6 +25,15 @@ from .terminal import terminal_size
 logger = None
 last_pb_instance = None # one for logger, 2 for progressbar
 last_rendered_length = 0
+
+@dataclass
+class ColumnSpec:
+    label: str
+    span: int = 1
+
+    def __post_init__(self):
+        if self.span < 1:
+            self.span = 1
 
 def update_last_pb_instance(src) -> None:
     global last_pb_instance
@@ -171,10 +181,17 @@ class LogBar(logging.Logger):
         self.error = self.error_cls(logger=self)
         self.critical = self.critical_cls(logger=self)
 
-    def columns(self, headers: Optional[Iterable[str]] = None, *, padding: int = 2):
+    def columns(self, *headers, padding: int = 2):
         """Return a column-aware helper that keeps column widths aligned."""
 
-        return ColumnsPrinter(logger=self, headers=headers, padding=padding)
+        header_defs: Optional[Sequence] = None
+        if headers:
+            if len(headers) == 1 and isinstance(headers[0], Iterable) and not isinstance(headers[0], (str, bytes)):
+                header_defs = list(headers[0])
+            else:
+                header_defs = list(headers)
+
+        return ColumnsPrinter(logger=self, headers=header_defs, padding=padding)
 
     def _format_message(self, msg, args):
         """Format a log message while gracefully handling extra positional args."""
@@ -275,77 +292,174 @@ class LogBar(logging.Logger):
 class ColumnsPrinter:
     """Helper that formats rows into aligned columns using `LogBar`."""
 
-    def __init__(self, logger: LogBar, headers: Optional[Iterable[str]] = None, *, padding: int = 2):
+    def __init__(self, logger: LogBar, headers: Optional[Sequence] = None, *, padding: int = 2):
         self._logger = logger
         self._padding = max(padding, 0)
-        self._headers: List[str] = [str(h) for h in headers] if headers else []
-        self._widths: List[int] = []
+        self._columns: List[ColumnSpec] = []
+        self._slot_widths: List[int] = []
+        self._spec_starts: List[int] = []
         self._last_was_border = False
-        if self._headers:
-            self._update_widths(self._headers)
+
+        if headers:
+            self._set_columns(headers)
 
     @property
     def widths(self) -> List[int]:
-        return list(self._widths)
+        return list(self._slot_widths)
 
     @property
     def padding(self) -> int:
         return self._padding
 
-    def render(self):
-        padded_headers = list(self._headers)
-        if len(self._widths) > len(padded_headers):
-            padded_headers.extend([""] * (len(self._widths) - len(padded_headers)))
+    @property
+    def column_specs(self) -> List[ColumnSpec]:
+        return [ColumnSpec(spec.label, spec.span) for spec in self._columns]
 
-        self._update_widths(padded_headers)
+    def render(self):
+        if not self._columns:
+            return ""
+
+        self._apply_header_widths()
         self._emit_border()
-        row = self._render(padded_headers)
+        row = self._render_header()
         self._print_row(row)
         self._emit_border(force=True)
         return row
 
     def info(self, *values):
-        texts = [str(value) for value in values]
-        self._update_widths(texts)
+        values_list = self._prepare_values(values)
+        self._update_slot_widths(values_list)
         self._emit_border()
-        row = self._render(texts)
+        row = self._render_row(values_list)
         self._print_row(row)
         self._emit_border(force=True)
         return row
 
-    def _ensure_capacity(self, length: int) -> None:
-        while len(self._widths) < length:
-            self._widths.append(0)
+    def _set_columns(self, headers: Sequence) -> None:
+        self._columns = [self._normalize_column(entry) for entry in headers]
+        self._recompute_layout()
+        self._apply_header_widths()
 
-    def _update_widths(self, values: Iterable[str]) -> None:
+    def _normalize_column(self, entry) -> ColumnSpec:
+        if isinstance(entry, ColumnSpec):
+            label = entry.label
+            span = entry.span
+        elif isinstance(entry, dict):
+            label = str(entry.get("label") or entry.get("name") or "")
+            span = int(entry.get("span", 1)) if entry.get("span") is not None else 1
+        elif isinstance(entry, (list, tuple)) and entry:
+            label = str(entry[0])
+            if len(entry) > 1 and isinstance(entry[1], int):
+                span = entry[1]
+            else:
+                span = 1
+        else:
+            label = str(entry) if entry is not None else ""
+            span = 1
+
+        return ColumnSpec(label=label, span=max(1, int(span)))
+
+    def _recompute_layout(self) -> None:
+        starts: List[int] = []
+        idx = 0
+        for spec in self._columns:
+            starts.append(idx)
+            idx += spec.span
+        self._spec_starts = starts
+        slot_count = idx
+
+        if len(self._slot_widths) < slot_count:
+            self._slot_widths.extend([0] * (slot_count - len(self._slot_widths)))
+        elif len(self._slot_widths) > slot_count:
+            self._slot_widths = self._slot_widths[:slot_count]
+
+    def _slot_count(self) -> int:
+        return len(self._slot_widths)
+
+    def _ensure_slots(self, count: int) -> None:
+        if count <= self._slot_count():
+            return
+
+        if not self._columns:
+            self._columns = [ColumnSpec(label="", span=1) for _ in range(count)]
+        else:
+            extra = count - self._slot_count()
+            last = self._columns[-1]
+            self._columns[-1] = ColumnSpec(label=last.label, span=last.span + extra)
+
+        self._recompute_layout()
+        self._apply_header_widths()
+
+    def _apply_header_widths(self) -> None:
+        if not self._columns:
+            return
+
+        for spec, start in zip(self._columns, self._spec_starts):
+            if spec.span <= 0:
+                continue
+            if start >= len(self._slot_widths):
+                continue
+            self._slot_widths[start] = max(self._slot_widths[start], len(spec.label))
+
+    def _prepare_values(self, values: Iterable) -> List[str]:
         values_list = [str(value) for value in values]
-        self._ensure_capacity(len(values_list))
-        for idx, value in enumerate(values_list):
+        self._ensure_slots(len(values_list))
+        slot_count = self._slot_count()
+        if len(values_list) < slot_count:
+            values_list.extend([""] * (slot_count - len(values_list)))
+        else:
+            values_list = values_list[:slot_count]
+        return values_list
+
+    def _update_slot_widths(self, values: Iterable[str]) -> None:
+        for idx, value in enumerate(values):
+            if idx >= len(self._slot_widths):
+                break
             current = len(value)
-            if current > self._widths[idx]:
-                self._widths[idx] = current
+            if current > self._slot_widths[idx]:
+                self._slot_widths[idx] = current
 
-    def _render(self, values: Iterable[str]) -> str:
+    def _render_header(self) -> str:
+        pad = " " * self._padding
+        cells: List[str] = []
+
+        for spec, start in zip(self._columns, self._spec_starts):
+            span = max(1, spec.span)
+            total_width = 0
+            for offset in range(span):
+                idx = start + offset
+                if idx >= len(self._slot_widths):
+                    break
+                total_width += self._slot_widths[idx] + self._padding * 2
+                if offset < span - 1:
+                    total_width += 1  # account for removed divider
+
+            inner_width = max(0, total_width - self._padding * 2)
+            content = spec.label.ljust(inner_width)
+            cells.append(f"{pad}{content}{pad}")
+
+        return "|" + "|".join(cells) + "|"
+
+    def _render_row(self, values: Iterable[str]) -> str:
         values_list = [str(value) for value in values]
-        self._ensure_capacity(len(values_list))
-
-        padded = []
+        slot_count = self._slot_count()
         pad = " " * self._padding
 
-        for idx in range(len(self._widths)):
+        cells = []
+        for idx in range(slot_count):
             text = values_list[idx] if idx < len(values_list) else ""
-            cell = f"{pad}{text.ljust(self._widths[idx])}{pad}"
-            padded.append(cell)
+            width = self._slot_widths[idx] if idx < len(self._slot_widths) else len(text)
+            cell = f"{pad}{text.ljust(width)}{pad}"
+            cells.append(cell)
 
-        rendered = "|" + "|".join(padded) + "|"
-        return rendered
+        return "|" + "|".join(cells) + "|"
 
     def _print_row(self, row: str) -> None:
         self._last_was_border = False
         self._logger._process(LEVEL.INFO, row)
 
     def _emit_border(self, force: bool = False) -> None:
-        if not self._widths:
+        if not self._slot_widths:
             return
 
         if not force and self._last_was_border:
@@ -353,10 +467,9 @@ class ColumnsPrinter:
 
         pad = self._padding * 2
         segments = []
-        for width in self._widths:
+        for width in self._slot_widths:
             base = max(1, width)
-            cell_width = base + pad
-            segments.append("-" * cell_width)
+            segments.append("-" * (base + pad))
 
         border = "+" + "+".join(segments) + "+"
         self._logger._process(LEVEL.INFO, border)

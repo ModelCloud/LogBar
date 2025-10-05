@@ -15,12 +15,13 @@ def _clean(value: str) -> str:
 
 
 def test_columns_auto_expand(capsys):
-    cols = log.columns(["name", "age", "school"])
+    cols = log.columns(("name", 2), "age", "school")
 
     longest_name = "Johhhhhhhhhhh"
     rows = [
         ("John", "Doe", "8", "Doe School"),
         (longest_name, "Na", "12", "Na School"),
+        ("Jane", "Smith", "10", "Smith School", "Honors Program"),
     ]
 
     with mock.patch('logbar.logbar.terminal_size', return_value=(0, 0)):
@@ -43,17 +44,35 @@ def test_columns_auto_expand(capsys):
 
     cols_widths = cols.widths
     assert cols_widths[0] >= len(longest_name)
+    assert cols_widths[1] >= len("Smith")
+    assert cols_widths[3] >= len("Doe School")
+    assert cols_widths[4] >= len("Honors Program")
+
+    # last column span should have expanded to absorb the extra value in the final row
+    assert cols.column_specs[-1].span >= 2
 
     clean_header = _clean(last_header)
     raw_cells = [cell for cell in clean_header.strip().split('|') if cell]
 
+    specs = cols.column_specs
+    assert len(raw_cells) == len(specs)
+
     assert raw_cells[0].strip() == "name"
     assert raw_cells[1].strip() == "age"
-    if len(raw_cells) >= 3:
-        assert raw_cells[2].strip() == "school"
+    assert raw_cells[2].strip() == "school"
 
-    assert len(raw_cells) == len(cols_widths)
+    slot_widths = cols.widths
+    start = 0
+    for cell, spec in zip(raw_cells, specs):
+        total_width = 0
+        for offset in range(spec.span):
+            idx = start + offset
+            if idx >= len(slot_widths):
+                break
+            total_width += slot_widths[idx] + (cols.padding * 2)
+            if offset < spec.span - 1:
+                total_width += 1
 
-    for idx, cell in enumerate(raw_cells):
-        expected_len = cols_widths[idx] + (cols.padding * 2)
+        expected_len = total_width
         assert len(cell) == expected_len
+        start += spec.span
