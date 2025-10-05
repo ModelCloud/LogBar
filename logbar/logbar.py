@@ -17,7 +17,7 @@
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Iterable, List, Sequence
+from typing import Optional, Iterable, List, Sequence, Tuple, Union
 
 from .terminal import terminal_size
 
@@ -30,6 +30,7 @@ last_rendered_length = 0
 class ColumnSpec:
     label: str
     span: int = 1
+    width: Optional[Tuple[str, float]] = None
 
     def __post_init__(self):
         if self.span < 1:
@@ -181,17 +182,25 @@ class LogBar(logging.Logger):
         self.error = self.error_cls(logger=self)
         self.critical = self.critical_cls(logger=self)
 
-    def columns(self, *headers, padding: int = 2):
+    def columns(self, *headers, cols: Optional[Sequence] = None, width: Optional[Union[str, int, float]] = None, padding: int = 2):
         """Return a column-aware helper that keeps column widths aligned."""
 
         header_defs: Optional[Sequence] = None
-        if headers:
+
+        if cols is not None:
+            if isinstance(cols, (str, bytes)):
+                header_defs = [cols]
+            elif isinstance(cols, Iterable):
+                header_defs = list(cols)
+            else:
+                header_defs = [cols]
+        elif headers:
             if len(headers) == 1 and isinstance(headers[0], Iterable) and not isinstance(headers[0], (str, bytes)):
                 header_defs = list(headers[0])
             else:
                 header_defs = list(headers)
 
-        return ColumnsPrinter(logger=self, headers=header_defs, padding=padding)
+        return ColumnsPrinter(logger=self, headers=header_defs, padding=padding, width_hint=width)
 
     def _format_message(self, msg, args):
         """Format a log message while gracefully handling extra positional args."""
@@ -292,13 +301,16 @@ class LogBar(logging.Logger):
 class ColumnsPrinter:
     """Helper that formats rows into aligned columns using `LogBar`."""
 
-    def __init__(self, logger: LogBar, headers: Optional[Sequence] = None, *, padding: int = 2):
+    def __init__(self, logger: LogBar, headers: Optional[Sequence] = None, *, padding: int = 2, width_hint: Optional[Union[str, int, float]] = None):
         self._logger = logger
         self._padding = max(padding, 0)
         self._columns: List[ColumnSpec] = []
         self._slot_widths: List[int] = []
+        self._slot_padding: List[int] = []
         self._spec_starts: List[int] = []
         self._last_was_border = False
+        self._target_width_hint: Optional[Tuple[str, float]] = self._parse_width_hint(width_hint)
+        self._current_total_width: Optional[int] = None
 
         if headers:
             self._set_columns(headers)
@@ -313,7 +325,18 @@ class ColumnsPrinter:
 
     @property
     def column_specs(self) -> List[ColumnSpec]:
-        return [ColumnSpec(spec.label, spec.span) for spec in self._columns]
+        return [ColumnSpec(spec.label, spec.span, spec.width) for spec in self._columns]
+
+    def width(self, width: Optional[Union[str, int, float]] = None):
+        if width is None:
+            if self._current_total_width is not None:
+                return self._current_total_width
+            return self._get_target_width()
+
+        self._target_width_hint = self._parse_width_hint(width)
+        self._apply_initial_widths()
+        self._apply_header_widths()
+        return self
 
     def render(self, level: Optional[LEVEL] = None):
         level = level or LEVEL.INFO
@@ -354,26 +377,41 @@ class ColumnsPrinter:
     def _set_columns(self, headers: Sequence) -> None:
         self._columns = [self._normalize_column(entry) for entry in headers]
         self._recompute_layout()
+        self._apply_initial_widths()
         self._apply_header_widths()
 
     def _normalize_column(self, entry) -> ColumnSpec:
         if isinstance(entry, ColumnSpec):
             label = entry.label
             span = entry.span
+            width_hint = entry.width
         elif isinstance(entry, dict):
             label = str(entry.get("label") or entry.get("name") or "")
             span = int(entry.get("span", 1)) if entry.get("span") is not None else 1
+            width_hint = self._parse_width_hint(entry.get("width"))
         elif isinstance(entry, (list, tuple)) and entry:
             label = str(entry[0])
-            if len(entry) > 1 and isinstance(entry[1], int):
-                span = entry[1]
-            else:
-                span = 1
+            span = 1
+            width_hint = None
+            if len(entry) > 1:
+                second = entry[1]
+                if isinstance(second, dict):
+                    span = int(second.get("span", span)) if second.get("span") is not None else span
+                    width_hint = self._parse_width_hint(second.get("width"))
+                elif isinstance(second, int):
+                    span = second
+                    if len(entry) > 2:
+                        width_hint = self._parse_width_hint(entry[2])
+                else:
+                    width_hint = self._parse_width_hint(second)
+                if len(entry) > 2 and width_hint is None:
+                    width_hint = self._parse_width_hint(entry[2])
         else:
             label = str(entry) if entry is not None else ""
             span = 1
+            width_hint = None
 
-        return ColumnSpec(label=label, span=max(1, int(span)))
+        return ColumnSpec(label=label, span=max(1, int(span)), width=width_hint)
 
     def _recompute_layout(self) -> None:
         starts: List[int] = []
@@ -388,6 +426,176 @@ class ColumnsPrinter:
             self._slot_widths.extend([0] * (slot_count - len(self._slot_widths)))
         elif len(self._slot_widths) > slot_count:
             self._slot_widths = self._slot_widths[:slot_count]
+
+        if len(self._slot_padding) < slot_count:
+            self._slot_padding.extend([self._padding] * (slot_count - len(self._slot_padding)))
+        elif len(self._slot_padding) > slot_count:
+            self._slot_padding = self._slot_padding[:slot_count]
+
+    def _parse_width_hint(self, value: Optional[Union[str, int, float]]) -> Optional[Tuple[str, float]]:
+        if value is None:
+            return None
+
+        if isinstance(value, (int, float)):
+            if value <= 0:
+                return None
+            return ("chars", float(value))
+
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            if raw.endswith('%'):
+                try:
+                    ratio = float(raw[:-1]) / 100.0
+                except ValueError:
+                    return None
+                if ratio <= 0:
+                    return None
+                return ("percent", ratio)
+            try:
+                numeric = float(raw)
+            except ValueError:
+                return None
+            if numeric <= 0:
+                return None
+            return ("chars", numeric)
+
+        return None
+
+    def _minimal_width(self) -> int:
+        if not self._columns:
+            return 0
+        slot_count = sum(spec.span for spec in self._columns)
+        if slot_count == 0:
+            return 0
+
+        base_labels = sum(max(len(spec.label), 1) for spec in self._columns)
+        padding_total = slot_count * (self._padding * 2)
+        separators = slot_count + 1
+        inter_column_gaps = max(0, slot_count - len(self._columns))
+        return base_labels + padding_total + separators + inter_column_gaps
+
+    def _get_target_width(self) -> int:
+        hint = self._target_width_hint
+        term_cols, _ = terminal_size()
+        if term_cols <= 0:
+            term_cols = 80
+
+        available = max(0, term_cols - (LEVEL_MAX_LENGTH + 2))
+
+        if hint:
+            if hint[0] == "percent":
+                target = int(available * hint[1])
+            else:
+                target = int(hint[1])
+        else:
+            target = available
+
+        minimal = self._minimal_width()
+        if target <= 0:
+            target = minimal
+
+        return max(target, minimal)
+
+    def _apply_initial_widths(self) -> None:
+        slot_count = self._slot_count()
+        if slot_count == 0:
+            return
+
+        # reset base widths and padding
+        self._slot_widths = [1] * slot_count
+        self._slot_padding = [self._padding] * slot_count
+
+        total_width = self._get_target_width()
+        column_count = len(self._columns)
+
+        # first satisfy explicit width hints
+        for col_idx, spec in enumerate(self._columns):
+            if spec.width is None:
+                continue
+            target = self._resolve_width_hint(spec.width, total_width)
+            self._configure_column_width(col_idx, target)
+
+        # compute current total and adjust to target
+        current_total = sum(self._column_total_width(idx) for idx in range(column_count))
+        if current_total > total_width:
+            total_width = current_total
+
+        remaining = max(0, total_width - current_total)
+        expandable = [idx for idx, spec in enumerate(self._columns) if spec.width is None]
+        if not expandable:
+            expandable = list(range(column_count))
+
+        while remaining > 0 and expandable:
+            for col_idx in expandable:
+                if remaining <= 0:
+                    break
+                self._grow_column(col_idx, 1)
+                remaining -= 1
+
+        self._current_total_width = sum(self._column_total_width(idx) for idx in range(column_count))
+
+    def _resolve_width_hint(self, hint: Optional[Tuple[str, float]], total_width: int) -> Optional[int]:
+        if not hint:
+            return None
+        if hint[0] == "percent":
+            return max(0, int(total_width * hint[1]))
+        return max(0, int(hint[1]))
+
+    def _configure_column_width(self, col_idx: int, target: Optional[int]) -> None:
+        start = self._spec_starts[col_idx]
+        span = self._columns[col_idx].span
+        if span <= 0:
+            return
+
+        slot_indices = [start + offset for offset in range(span) if start + offset < len(self._slot_widths)]
+        if not slot_indices:
+            return
+
+        # reduce padding to allow smaller widths when needed
+        for idx in slot_indices:
+            self._slot_padding[idx] = 0
+            self._slot_widths[idx] = 1
+
+        min_width = self._column_total_width(col_idx)
+        if target is None or target < min_width:
+            target = min_width
+
+        extra = target - min_width
+        while extra > 0:
+            for idx in slot_indices:
+                self._slot_widths[idx] += 1
+                extra -= 1
+                if extra <= 0:
+                    break
+
+    def _grow_column(self, col_idx: int, amount: int) -> None:
+        if amount <= 0:
+            return
+        start = self._spec_starts[col_idx]
+        span = self._columns[col_idx].span
+        slot_indices = [start + offset for offset in range(span) if start + offset < len(self._slot_widths)]
+        if not slot_indices:
+            return
+        while amount > 0:
+            for idx in slot_indices:
+                self._slot_widths[idx] += 1
+                amount -= 1
+                if amount <= 0:
+                    break
+
+    def _column_total_width(self, col_idx: int) -> int:
+        start = self._spec_starts[col_idx]
+        span = self._columns[col_idx].span
+        total = 0
+        for offset in range(span):
+            slot_idx = start + offset
+            if slot_idx >= len(self._slot_widths):
+                break
+            total += self._slot_widths[slot_idx] + (self._slot_padding[slot_idx] * 2)
+        total += max(0, span - 1)
+        return total
 
     def _slot_count(self) -> int:
         return len(self._slot_widths)
@@ -404,6 +612,7 @@ class ColumnsPrinter:
             self._columns[-1] = ColumnSpec(label=last.label, span=last.span + extra)
 
         self._recompute_layout()
+        self._apply_initial_widths()
         self._apply_header_widths()
 
     def _apply_header_widths(self) -> None:
@@ -411,11 +620,31 @@ class ColumnsPrinter:
             return
 
         for spec, start in zip(self._columns, self._spec_starts):
-            if spec.span <= 0:
+            span = spec.span
+            if span <= 0:
                 continue
             if start >= len(self._slot_widths):
                 continue
-            self._slot_widths[start] = max(self._slot_widths[start], len(spec.label))
+
+            total_slot_width = 0
+            for offset in range(span):
+                idx = start + offset
+                if idx >= len(self._slot_widths):
+                    break
+                total_slot_width += self._slot_widths[idx] + (self._slot_padding[idx] * 2)
+
+            total_slot_width += max(0, span - 1)
+            label_len = len(spec.label)
+
+            left_pad = self._slot_padding[start]
+            right_index = start + span - 1
+            right_pad = self._slot_padding[right_index] if right_index < len(self._slot_padding) else self._padding
+
+            inner_width = max(0, total_slot_width - left_pad - right_pad)
+
+            if inner_width < label_len:
+                deficit = label_len - inner_width
+                self._slot_widths[start] += deficit
 
     def _prepare_values(self, values: Iterable) -> List[str]:
         values_list = [str(value) for value in values]
@@ -436,35 +665,35 @@ class ColumnsPrinter:
                 self._slot_widths[idx] = current
 
     def _render_header(self) -> str:
-        pad = " " * self._padding
         cells: List[str] = []
 
-        for spec, start in zip(self._columns, self._spec_starts):
+        for idx, spec in enumerate(self._columns):
             span = max(1, spec.span)
-            total_width = 0
-            for offset in range(span):
-                idx = start + offset
-                if idx >= len(self._slot_widths):
-                    break
-                total_width += self._slot_widths[idx] + self._padding * 2
-                if offset < span - 1:
-                    total_width += 1  # account for removed divider
+            start = self._spec_starts[idx]
+            total_width = self._column_total_width(idx)
 
-            inner_width = max(0, total_width - self._padding * 2)
+            left_pad_val = self._slot_padding[start] if start < len(self._slot_padding) else self._padding
+            right_index = start + span - 1
+            right_pad_val = self._slot_padding[right_index] if right_index < len(self._slot_padding) else self._padding
+
+            inner_width = max(0, total_width - left_pad_val - right_pad_val)
+            pad_left = " " * left_pad_val
+            pad_right = " " * right_pad_val
             content = spec.label.ljust(inner_width)
-            cells.append(f"{pad}{content}{pad}")
+            cells.append(f"{pad_left}{content}{pad_right}")
 
         return "|" + "|".join(cells) + "|"
 
     def _render_row(self, values: Iterable[str]) -> str:
         values_list = [str(value) for value in values]
         slot_count = self._slot_count()
-        pad = " " * self._padding
 
         cells = []
         for idx in range(slot_count):
             text = values_list[idx] if idx < len(values_list) else ""
             width = self._slot_widths[idx] if idx < len(self._slot_widths) else len(text)
+            pad_width = self._slot_padding[idx] if idx < len(self._slot_padding) else self._padding
+            pad = " " * pad_width
             cell = f"{pad}{text.ljust(width)}{pad}"
             cells.append(cell)
 

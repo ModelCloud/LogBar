@@ -18,7 +18,7 @@ def _clean(value: str) -> str:
 
 
 def test_columns_auto_expand(capsys):
-    cols = log.columns(("name", 2), "age", "school")
+    cols = log.columns(cols=(("name", 2), "age", "school"))
 
     longest_name = "Johhhhhhhhhhh"
     rows = [
@@ -82,7 +82,7 @@ def test_columns_auto_expand(capsys):
 
 
 def test_columns_support_other_levels(capsys):
-    cols = log.columns("name", "age")
+    cols = log.columns(cols=("name", "age"))
 
     buffer = io.StringIO()
 
@@ -127,3 +127,29 @@ def test_columns_support_other_levels(capsys):
             if '+' in row:
                 continue  # border
             assert row.count('|') >= 3, f"Row for {level} missing column separators"
+
+
+def test_columns_initial_width_distribution(capsys):
+    cols = log.columns(cols=({"label": "name", "span": 2, "width": "10%"}, "school"), width="50%")
+
+    buffer = io.StringIO()
+
+    with mock.patch('logbar.logbar.terminal_size', return_value=(100, 24)):
+        with redirect_stdout(buffer):
+            cols.width("50%")
+            target = cols.width()
+            cols.render()
+
+    widths = cols.widths
+    assert len(widths) == 3
+    assert all(width >= 1 for width in widths)
+    assert widths[2] >= widths[0]
+
+    specs = cols.column_specs
+    assert specs[0].width == ('percent', 0.1)
+
+    header_lines = [line for line in _clean(buffer.getvalue()).splitlines() if 'name' in line]
+    assert header_lines
+    header_len = len(header_lines[0].strip())
+    assert header_len >= target * 0.8  # allow padding adjustments
+    assert header_len <= 100  # should not exceed mocked terminal width
