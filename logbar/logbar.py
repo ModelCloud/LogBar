@@ -389,27 +389,19 @@ class ColumnsPrinter:
             label = str(entry.get("label") or entry.get("name") or "")
             span = int(entry.get("span", 1)) if entry.get("span") is not None else 1
             width_hint = self._parse_width_hint(entry.get("width"))
-        elif isinstance(entry, (list, tuple)) and entry:
-            label = str(entry[0])
+        elif isinstance(entry, (str, bytes)):
+            label = str(entry)
             span = 1
             width_hint = None
-            if len(entry) > 1:
-                second = entry[1]
-                if isinstance(second, dict):
-                    span = int(second.get("span", span)) if second.get("span") is not None else span
-                    width_hint = self._parse_width_hint(second.get("width"))
-                elif isinstance(second, int):
-                    span = second
-                    if len(entry) > 2:
-                        width_hint = self._parse_width_hint(entry[2])
-                else:
-                    width_hint = self._parse_width_hint(second)
-                if len(entry) > 2 and width_hint is None:
-                    width_hint = self._parse_width_hint(entry[2])
+        elif entry is None:
+            label = ""
+            span = 1
+            width_hint = None
         else:
-            label = str(entry) if entry is not None else ""
-            span = 1
-            width_hint = None
+            raise TypeError(
+                "Column definitions must be strings or dictionaries. "
+                f"Received unsupported entry: {entry!r}"
+            )
 
         return ColumnSpec(label=label, span=max(1, int(span)), width=width_hint)
 

@@ -5,6 +5,7 @@ import time
 from contextlib import redirect_stdout
 from unittest import mock
 
+import pytest
 from logbar import LogBar
 
 log = LogBar.shared()
@@ -18,7 +19,7 @@ def _clean(value: str) -> str:
 
 
 def test_columns_auto_expand(capsys):
-    cols = log.columns(cols=(("name", 2), "age", "school"))
+    cols = log.columns(cols=({"label": "name", "span": 2}, "age", "school"))
 
     longest_name = "Johhhhhhhhhhh"
     rows = [
@@ -79,6 +80,11 @@ def test_columns_auto_expand(capsys):
         expected_len = total_width
         assert len(cell) == expected_len
         start += spec.span
+
+
+def test_columns_reject_tuple_entries():
+    with pytest.raises(TypeError):
+        log.columns(cols=(("name", 2), "age"))
 
 
 def test_columns_support_other_levels(capsys):
