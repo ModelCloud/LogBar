@@ -27,13 +27,19 @@ def test_columns_auto_expand(capsys):
         start = time.time()
         idx = 0
         last_header = ""
+        info_calls = 0
 
         with capsys.disabled():
-            while time.time() - start < 5:
-                last_header = cols.render()
+            last_header = cols.render()
+            while time.time() - start < 2.5:
                 cols.info(*rows[idx % len(rows)])
+                info_calls += 1
                 idx += 1
+                if info_calls % 5 == 0:
+                    last_header = cols.render()
                 time.sleep(0.2)
+
+            last_header = cols.render()
 
     cols_widths = cols.widths
     assert cols_widths[0] >= len(longest_name)

@@ -23,6 +23,7 @@ from .terminal import terminal_size
 # global static/shared logger instance
 logger = None
 last_pb_instance = None # one for logger, 2 for progressbar
+last_rendered_length = 0
 
 def update_last_pb_instance(src) -> None:
     global last_pb_instance
@@ -230,11 +231,21 @@ class LogBar(logging.Logger):
     def _process(self, level: LEVEL, msg, *args, **kwargs):
         from logbar.progress import ProgressBar
 
+        global last_rendered_length
         columns, _ = terminal_size()
         str_msg = self._format_message(msg, args)
 
+        line_length = len(level.value) + (LEVEL_MAX_LENGTH - len(level.value)) + 1 + len(str_msg)
+
         if columns > 0:
-            str_msg += " " * (columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))  # -2 for cursor + space between LEVEL and msg
+            padding_needed = max(0, columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))
+            str_msg += " " * padding_needed  # -2 for cursor + space between LEVEL and msg
+            printable_length = columns
+            last_rendered_length = printable_length
+        else:
+            printable_length = line_length
+            if last_rendered_length > printable_length:
+                str_msg += " " * (last_rendered_length - printable_length)
 
         global last_pb_instance
         if isinstance(last_pb_instance, ProgressBar) and not last_pb_instance.closed:
@@ -247,6 +258,9 @@ class LogBar(logging.Logger):
 
         level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
         print(f"\r{color}{level.value}{reset}{level_padding} {str_msg}", end='\n', flush=True)
+
+        if columns <= 0:
+            last_rendered_length = printable_length
 
         if isinstance(last_pb_instance, ProgressBar):
             if not last_pb_instance.closed:
@@ -266,6 +280,7 @@ class ColumnsPrinter:
         self._padding = max(padding, 0)
         self._headers: List[str] = [str(h) for h in headers] if headers else []
         self._widths: List[int] = []
+        self._last_was_border = False
         if self._headers:
             self._update_widths(self._headers)
 
@@ -283,15 +298,19 @@ class ColumnsPrinter:
             padded_headers.extend([""] * (len(self._widths) - len(padded_headers)))
 
         self._update_widths(padded_headers)
+        self._emit_border()
         row = self._render(padded_headers)
-        self._logger._process(LEVEL.INFO, row)
+        self._print_row(row)
+        self._emit_border(force=True)
         return row
 
     def info(self, *values):
         texts = [str(value) for value in values]
         self._update_widths(texts)
+        self._emit_border()
         row = self._render(texts)
-        self._logger._process(LEVEL.INFO, row)
+        self._print_row(row)
+        self._emit_border(force=True)
         return row
 
     def _ensure_capacity(self, length: int) -> None:
@@ -320,3 +339,25 @@ class ColumnsPrinter:
 
         rendered = "|" + "|".join(padded) + "|"
         return rendered
+
+    def _print_row(self, row: str) -> None:
+        self._last_was_border = False
+        self._logger._process(LEVEL.INFO, row)
+
+    def _emit_border(self, force: bool = False) -> None:
+        if not self._widths:
+            return
+
+        if not force and self._last_was_border:
+            return
+
+        pad = self._padding * 2
+        segments = []
+        for width in self._widths:
+            base = max(1, width)
+            cell_width = base + pad
+            segments.append("-" * cell_width)
+
+        border = "+" + "+".join(segments) + "+"
+        self._logger._process(LEVEL.INFO, border)
+        self._last_was_border = True
