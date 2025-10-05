@@ -210,3 +210,42 @@ def test_columns_fit_width_matches_content():
     assert widths[0] == len("verylongtagname")
     assert widths[1] == len("another message")
     assert cols.column_specs[0].width == ('fit', 0.0)
+
+
+def test_columns_ignore_ansi_sequences():
+    cols = log.columns(cols=("name", "status"))
+
+    buffer = io.StringIO()
+    red_fail = "\x1b[31mFAIL\x1b[0m"
+    green_ready = "\x1b[32mREADY\x1b[0m"
+
+    with mock.patch('logbar.logbar.terminal_size', return_value=(0, 0)):
+        with redirect_stdout(buffer):
+            cols.info.header()
+            cols.info("task", red_fail)
+            cols.info("task2", green_ready)
+            cols.info.header()
+
+    widths = cols.widths
+    assert len(widths) >= 2
+    expected_visible = max(len("status"), len("READY"))
+    assert widths[1] == expected_visible
+    assert widths[1] < len(red_fail)
+
+    cleaned = _clean(buffer.getvalue())
+    header_lines = [line for line in cleaned.splitlines() if 'name' in line and 'status' in line and '|' in line]
+    assert header_lines
+    final_header = header_lines[-1]
+    first_pipe = final_header.index('|')
+    row_segment = final_header[first_pipe + 1:]
+    header_cells = [cell for cell in row_segment.split('|') if cell]
+    assert len(header_cells) >= 2
+    status_cell = header_cells[1]
+    assert status_cell.strip() == "status"
+    expected_cell_width = widths[1] + (cols.padding * 2)
+    assert len(status_cell) == expected_cell_width
+
+    row_lines = [line for line in cleaned.splitlines() if ('|  task' in line or '|  task2' in line)]
+    assert row_lines
+    assert any('FAIL' in line for line in row_lines)
+    assert any('READY' in line for line in row_lines)
