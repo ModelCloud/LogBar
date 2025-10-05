@@ -16,7 +16,7 @@
 
 import logging
 from enum import Enum
-from typing import Optional, Iterable
+from typing import Optional, Iterable, List
 
 from .terminal import terminal_size
 
@@ -170,6 +170,11 @@ class LogBar(logging.Logger):
         self.error = self.error_cls(logger=self)
         self.critical = self.critical_cls(logger=self)
 
+    def columns(self, headers: Optional[Iterable[str]] = None, *, padding: int = 2):
+        """Return a column-aware helper that keeps column widths aligned."""
+
+        return ColumnsPrinter(logger=self, headers=headers, padding=padding)
+
     def _format_message(self, msg, args):
         """Format a log message while gracefully handling extra positional args."""
         if not args:
@@ -251,3 +256,66 @@ class LogBar(logging.Logger):
                     last_pb_instance.draw()
             else:
                 last_pb_instance = None
+
+
+class ColumnsPrinter:
+    """Helper that formats rows into aligned columns using `LogBar`."""
+
+    def __init__(self, logger: LogBar, headers: Optional[Iterable[str]] = None, *, padding: int = 2):
+        self._logger = logger
+        self._padding = max(padding, 0)
+        self._headers: List[str] = [str(h) for h in headers] if headers else []
+        self._widths: List[int] = []
+        if self._headers:
+            self._update_widths(self._headers)
+
+    @property
+    def widths(self) -> List[int]:
+        return list(self._widths)
+
+    def render(self):
+        padded_headers = list(self._headers)
+        if len(self._widths) > len(padded_headers):
+            padded_headers.extend([""] * (len(self._widths) - len(padded_headers)))
+
+        self._update_widths(padded_headers)
+        row = self._render(padded_headers)
+        self._logger._process(LEVEL.INFO, row)
+        return row
+
+    def info(self, *values):
+        texts = [str(value) for value in values]
+        self._update_widths(texts)
+        row = self._render(texts)
+        self._logger._process(LEVEL.INFO, row)
+        return row
+
+    def _ensure_capacity(self, length: int) -> None:
+        while len(self._widths) < length:
+            self._widths.append(0)
+
+    def _update_widths(self, values: Iterable[str]) -> None:
+        values_list = [str(value) for value in values]
+        self._ensure_capacity(len(values_list))
+        for idx, value in enumerate(values_list):
+            current = len(value)
+            if current > self._widths[idx]:
+                self._widths[idx] = current
+
+    def _render(self, values: Iterable[str]) -> str:
+        values_list = [str(value) for value in values]
+        self._ensure_capacity(len(values_list))
+
+        padded = []
+        spacer = " " * self._padding if self._padding else ""
+
+        for idx in range(len(self._widths)):
+            text = values_list[idx] if idx < len(values_list) else ""
+            padded.append(text.ljust(self._widths[idx]))
+
+        rendered = ("|" + spacer).join(padded).rstrip()
+        if rendered and rendered[0] != "|":
+            rendered = f"|{rendered}"
+        if rendered and not rendered.endswith("|"):
+            rendered = f"{rendered}|"
+        return rendered
