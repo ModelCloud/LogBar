@@ -1,5 +1,8 @@
+import io
 import re
+import sys
 import time
+from contextlib import redirect_stdout
 from unittest import mock
 
 from logbar import LogBar
@@ -76,3 +79,51 @@ def test_columns_auto_expand(capsys):
         expected_len = total_width
         assert len(cell) == expected_len
         start += spec.span
+
+
+def test_columns_support_other_levels(capsys):
+    cols = log.columns("name", "age")
+
+    buffer = io.StringIO()
+
+    class Tee(io.TextIOBase):
+        def write(self, data):
+            sys.__stdout__.write(data)
+            buffer.write(data)
+            return len(data)
+
+        def flush(self):
+            sys.__stdout__.flush()
+            buffer.flush()
+
+    with mock.patch('logbar.logbar.terminal_size', return_value=(0, 0)):
+        with capsys.disabled():
+            with redirect_stdout(Tee()):
+                cols.render()
+                cols.debug("debug", "10")
+                cols.warn("warn", "20")
+                cols.error("error", "30")
+                cols.critical("critical", "40")
+
+    captured = _clean(buffer.getvalue())
+    lines = [line for line in captured.splitlines() if line.strip()]
+
+    level_expectations = {
+        "DEBUG": "debug",
+        "WARN": "warn",
+        "ERROR": "error",
+        "CRIT": "critical",
+    }
+
+    for level, payload in level_expectations.items():
+        assert any(level in line for line in lines), f"{level} not present in output"
+        assert any(payload in line for line in lines), f"Value {payload} missing for {level}"
+
+    # ensure each level row retains table delimiters
+    for level in level_expectations:
+        row_lines = [line for line in lines if level in line]
+        assert row_lines, f"Expected row for {level}"
+        for row in row_lines:
+            if '+' in row:
+                continue  # border
+            assert row.count('|') >= 3, f"Row for {level} missing column separators"

@@ -315,24 +315,40 @@ class ColumnsPrinter:
     def column_specs(self) -> List[ColumnSpec]:
         return [ColumnSpec(spec.label, spec.span) for spec in self._columns]
 
-    def render(self):
+    def render(self, level: Optional[LEVEL] = None):
+        level = level or LEVEL.INFO
         if not self._columns:
             return ""
 
         self._apply_header_widths()
-        self._emit_border()
+        self._emit_border(level)
         row = self._render_header()
-        self._print_row(row)
-        self._emit_border(force=True)
+        self._print_row(level, row)
+        self._emit_border(level, force=True)
         return row
 
     def info(self, *values):
+        return self._log_values(LEVEL.INFO, values)
+
+    def debug(self, *values):
+        return self._log_values(LEVEL.DEBUG, values)
+
+    def warn(self, *values):
+        return self._log_values(LEVEL.WARN, values)
+
+    def error(self, *values):
+        return self._log_values(LEVEL.ERROR, values)
+
+    def critical(self, *values):
+        return self._log_values(LEVEL.CRITICAL, values)
+
+    def _log_values(self, level: LEVEL, values: Iterable) -> str:
         values_list = self._prepare_values(values)
         self._update_slot_widths(values_list)
-        self._emit_border()
+        self._emit_border(level)
         row = self._render_row(values_list)
-        self._print_row(row)
-        self._emit_border(force=True)
+        self._print_row(level, row)
+        self._emit_border(level, force=True)
         return row
 
     def _set_columns(self, headers: Sequence) -> None:
@@ -454,11 +470,11 @@ class ColumnsPrinter:
 
         return "|" + "|".join(cells) + "|"
 
-    def _print_row(self, row: str) -> None:
+    def _print_row(self, level: LEVEL, row: str) -> None:
         self._last_was_border = False
-        self._logger._process(LEVEL.INFO, row)
+        self._logger._process(level, row)
 
-    def _emit_border(self, force: bool = False) -> None:
+    def _emit_border(self, level: LEVEL, force: bool = False) -> None:
         if not self._slot_widths:
             return
 
@@ -472,5 +488,5 @@ class ColumnsPrinter:
             segments.append("-" * (base + pad))
 
         border = "+" + "+".join(segments) + "+"
-        self._logger._process(LEVEL.INFO, border)
+        self._logger._process(level, border)
         self._last_was_border = True
