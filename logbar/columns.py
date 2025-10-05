@@ -5,10 +5,33 @@
 
 """Column layout helpers for LogBar output."""
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .terminal import terminal_size
+
+
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def _visible_length(text: str) -> int:
+    if not text:
+        return 0
+    cleaned = _strip_ansi(text)
+    cleaned = cleaned.replace("\r", "").replace("\n", "")
+    return len(cleaned)
+
+
+def _pad_visible(text: str, target: int) -> str:
+    current = _visible_length(text)
+    if current >= target:
+        return text
+    return f"{text}{' ' * (target - current)}"
 
 
 @dataclass
@@ -34,6 +57,9 @@ class ColumnsPrinter:
 
         def __call__(self, *values: Any) -> str:
             return self._printer._log_values(self._level, values)
+
+        def simulate(self, *values: Any) -> None:
+            self._printer._simulate_values(self._level, values)
 
         def header(self) -> str:
             return self._printer._log_header(self._level)
@@ -180,6 +206,10 @@ class ColumnsPrinter:
         self._emit_border(level, force=True)
         return row
 
+    def _simulate_values(self, level: Any, values: Iterable) -> None:
+        values_list = self._prepare_values(values)
+        self._update_slot_widths(values_list)
+
     def _set_columns(self, headers: Sequence) -> None:
         self._columns = [self._normalize_column(entry) for entry in headers]
         self._recompute_layout()
@@ -271,7 +301,7 @@ class ColumnsPrinter:
         if slot_count == 0:
             return 0
 
-        base_labels = sum(max(len(spec.label), 1) for spec in self._columns)
+        base_labels = sum(max(_visible_length(spec.label), 1) for spec in self._columns)
         padding_total = slot_count * (self._padding * 2)
         separators = slot_count + 1
         inter_column_gaps = max(0, slot_count - len(self._columns))
@@ -331,12 +361,11 @@ class ColumnsPrinter:
             self._configure_column_width(col_idx, target)
 
         current_total = sum(self._column_total_width(idx) for idx in range(column_count))
-        has_fit = any(spec.width and spec.width[0] == "fit" for spec in self._columns)
         has_percent = any(spec.width and spec.width[0] == "percent" for spec in self._columns)
         if current_total > total_width:
             total_width = current_total
 
-        if has_fit and not self._target_width_hint and not has_percent:
+        if not self._target_width_hint and not has_percent:
             total_width = current_total
 
         remaining = max(0, total_width - current_total)
@@ -348,19 +377,20 @@ class ColumnsPrinter:
                 if spec.width is None or (spec.width and spec.width[0] != "fit")
             ]
 
-        while remaining > 0 and expandable:
-            progressed = False
-            for col_idx in expandable:
-                if remaining <= 0:
+        if remaining > 0 and expandable:
+            while remaining > 0:
+                progressed = False
+                for col_idx in expandable:
+                    if remaining <= 0:
+                        break
+                    spec = self._columns[col_idx]
+                    if spec.width and spec.width[0] == "fit":
+                        continue
+                    self._grow_column(col_idx, 1)
+                    remaining -= 1
+                    progressed = True
+                if not progressed:
                     break
-                spec = self._columns[col_idx]
-                if spec.width and spec.width[0] == "fit":
-                    continue
-                self._grow_column(col_idx, 1)
-                remaining -= 1
-                progressed = True
-            if not progressed:
-                break
 
         slot_count = self._slot_count()
         separator_count = slot_count + 1 if slot_count else 0
@@ -464,7 +494,7 @@ class ColumnsPrinter:
                 total_slot_width += self._slot_widths[idx] + (self._slot_padding[idx] * 2)
 
             total_slot_width += max(0, span - 1)
-            label_len = len(spec.label)
+            label_len = _visible_length(spec.label)
 
             left_pad = self._slot_padding[start]
             right_index = start + span - 1
@@ -490,7 +520,7 @@ class ColumnsPrinter:
         for idx, value in enumerate(values):
             if idx >= len(self._slot_widths):
                 break
-            current = len(value)
+            current = _visible_length(value)
             if current > self._slot_widths[idx]:
                 self._slot_widths[idx] = current
 
@@ -509,7 +539,7 @@ class ColumnsPrinter:
             inner_width = max(0, total_width - left_pad_val - right_pad_val)
             pad_left = " " * left_pad_val
             pad_right = " " * right_pad_val
-            content = spec.label.ljust(inner_width)
+            content = _pad_visible(spec.label, inner_width)
             cells.append(f"{pad_left}{content}{pad_right}")
 
         return "|" + "|".join(cells) + "|"
@@ -521,10 +551,14 @@ class ColumnsPrinter:
         cells = []
         for idx in range(slot_count):
             text = values_list[idx] if idx < len(values_list) else ""
-            width = self._slot_widths[idx] if idx < len(self._slot_widths) else len(text)
+            if idx < len(self._slot_widths):
+                width = self._slot_widths[idx]
+            else:
+                width = _visible_length(text)
             pad_width = self._slot_padding[idx] if idx < len(self._slot_padding) else self._padding
             pad = " " * pad_width
-            cell = f"{pad}{text.ljust(width)}{pad}"
+            padded_text = _pad_visible(text, width)
+            cell = f"{pad}{padded_text}{pad}"
             cells.append(cell)
 
         return "|" + "|".join(cells) + "|"

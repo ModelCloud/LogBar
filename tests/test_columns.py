@@ -87,6 +87,22 @@ def test_columns_reject_tuple_entries():
         log.columns(cols=(("name", 2), "age"))
 
 
+def test_columns_simulate_updates_width_without_output():
+    cols = log.columns(cols=("name", "details"))
+
+    long_value = "longer than anything real"
+
+    with mock.patch.object(cols._logger, "_process") as mocked:
+        cols.info.simulate(long_value, "ok")
+        mocked.assert_not_called()
+
+    cols.info("short", "value")
+
+    widths = cols.widths
+    assert widths
+    assert widths[0] >= len(long_value)
+
+
 def test_columns_support_other_levels(capsys):
     cols = log.columns(cols=("name", "age"))
 
@@ -186,7 +202,15 @@ def test_columns_respects_available_width():
 
     row_segment = header_line[header_line.index('|'):]
     expected = columns - (cols._level_max_length + 2)
-    assert len(row_segment) == expected
+    segment_len = len(row_segment)
+    content_segment = row_segment[: row_segment.rfind('|') + 1]
+    slot_widths = cols.widths
+    computed_len = len(slot_widths) + 1  # separators
+    for width in slot_widths:
+        computed_len += (cols.padding * 2) + width
+    assert len(content_segment) == computed_len
+    assert segment_len == expected
+    assert len(content_segment) < expected
 
 
 def test_columns_fit_width_matches_content():
@@ -202,3 +226,42 @@ def test_columns_fit_width_matches_content():
     assert widths[0] == len("verylongtagname")
     assert widths[1] == len("another message")
     assert cols.column_specs[0].width == ('fit', 0.0)
+
+
+def test_columns_ignore_ansi_sequences():
+    cols = log.columns(cols=("name", "status"))
+
+    buffer = io.StringIO()
+    red_fail = "\x1b[31mFAIL\x1b[0m"
+    green_ready = "\x1b[32mREADY\x1b[0m"
+
+    with mock.patch('logbar.logbar.terminal_size', return_value=(0, 0)):
+        with redirect_stdout(buffer):
+            cols.info.header()
+            cols.info("task", red_fail)
+            cols.info("task2", green_ready)
+            cols.info.header()
+
+    widths = cols.widths
+    assert len(widths) >= 2
+    expected_visible = max(len("status"), len("READY"))
+    assert widths[1] == expected_visible
+    assert widths[1] < len(red_fail)
+
+    cleaned = _clean(buffer.getvalue())
+    header_lines = [line for line in cleaned.splitlines() if 'name' in line and 'status' in line and '|' in line]
+    assert header_lines
+    final_header = header_lines[-1]
+    first_pipe = final_header.index('|')
+    row_segment = final_header[first_pipe + 1:]
+    header_cells = [cell for cell in row_segment.split('|') if cell]
+    assert len(header_cells) >= 2
+    status_cell = header_cells[1]
+    assert status_cell.strip() == "status"
+    expected_cell_width = widths[1] + (cols.padding * 2)
+    assert len(status_cell) == expected_cell_width
+
+    row_lines = [line for line in cleaned.splitlines() if ('|  task' in line or '|  task2' in line)]
+    assert row_lines
+    assert any('FAIL' in line for line in row_lines)
+    assert any('READY' in line for line in row_lines)
