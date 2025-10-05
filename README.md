@@ -48,12 +48,12 @@ for _ in log.pb(range(5)):
     time.sleep(0.2)
 ```
 
-Sample output (actual terminal colors preserved):
+Sample output (colors omitted in plain-text view):
 
-```ansi
-[32mINFO[0m  hello from logbar
-[32mINFO[0m  this line shows once
-[32mINFO[0m  [###---------------]  20%  (1/5)
+```
+INFO  hello from logbar
+INFO  this line shows once
+INFO  [###---------------]  20%  (1/5)
 ```
 
 # Logging
@@ -67,13 +67,13 @@ log.error("cannot connect to database")
 log.critical.once("fuse blown, shutting down")
 ```
 
-Typical mixed-level output:
+Typical mixed-level output (Note: Markdown cannot display ANSI colors):
 
-```ansi
-[36mDEBUG[0m model version=v2.9.1
-[33mWARN [0m disk space is low (5%)
-[31mERROR[0m cannot connect to database
-[31mCRIT [0m fuse blown, shutting down
+```
+DEBUG model version=v2.9.1
+WARN  disk space is low (5%)
+ERROR cannot connect to database
+CRIT  fuse blown, shutting down
 ```
 
 # Progress Bars
@@ -99,10 +99,10 @@ for job in pb:
     log.info(f"finished {job}")
 ```
 
-Progress bar snapshot:
+Progress bar snapshot (plain-text example):
 
-```ansi
-[32mINFO[0m  Processing [##########------------]  40%  (8/20) in-flight: step-8
+```
+INFO  Processing [##########------------]  40%  (8/20) in-flight: step-8
 ```
 
 The bar always re-renders at the bottom, so log lines never overwrite your progress.
@@ -128,16 +128,16 @@ cols.info("alignment", "0.5s", "resizing", "fit width active")
 cols.render()
 ```
 
-Sample ANSI table output:
+Sample table output (plain-text):
 
-```ansi
-[32mINFO[0m  +----------+----------+-----------------------------+------------------------------+
-[32mINFO[0m  |  tag      |  duration |  message                     |  message                     |
-[32mINFO[0m  +----------+----------+-----------------------------+------------------------------+
-[32mINFO[0m  |  startup  |  1.2s     |  ready                       |  subsystem online            |
-[32mINFO[0m  +----------+----------+-----------------------------+------------------------------+
-[32mINFO[0m  |  alignment|  0.5s     |  resizing                    |  fit width active            |
-[32mINFO[0m  +----------+----------+-----------------------------+------------------------------+
+```
+INFO  +----------+----------+-----------------------------+------------------------------+
+INFO  |  tag      |  duration |  message                     |  message                     |
+INFO  +----------+----------+-----------------------------+------------------------------+
+INFO  |  startup  |  1.2s     |  ready                       |  subsystem online            |
+INFO  +----------+----------+-----------------------------+------------------------------+
+INFO  |  alignment|  0.5s     |  resizing                    |  fit width active            |
+INFO  +----------+----------+-----------------------------+------------------------------+
 ```
 
 Notice how the `tag` column expands precisely to the longest value thanks to `width="fit"`.
