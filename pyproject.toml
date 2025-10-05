@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "LogBar"
-version = "0.0.6"
+version = "0.0.7"
 description = "A unified Logger and ProgressBar util with zero dependencies."
 readme = "README.md"
 requires-python = ">=3"
