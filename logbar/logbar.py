@@ -273,6 +273,10 @@ class ColumnsPrinter:
     def widths(self) -> List[int]:
         return list(self._widths)
 
+    @property
+    def padding(self) -> int:
+        return self._padding
+
     def render(self):
         padded_headers = list(self._headers)
         if len(self._widths) > len(padded_headers):
@@ -307,15 +311,12 @@ class ColumnsPrinter:
         self._ensure_capacity(len(values_list))
 
         padded = []
-        spacer = " " * self._padding if self._padding else ""
+        pad = " " * self._padding
 
         for idx in range(len(self._widths)):
             text = values_list[idx] if idx < len(values_list) else ""
-            padded.append(text.ljust(self._widths[idx]))
+            cell = f"{pad}{text.ljust(self._widths[idx])}{pad}"
+            padded.append(cell)
 
-        rendered = ("|" + spacer).join(padded).rstrip()
-        if rendered and rendered[0] != "|":
-            rendered = f"|{rendered}"
-        if rendered and not rendered.endswith("|"):
-            rendered = f"{rendered}|"
+        rendered = "|" + "|".join(padded) + "|"
         return rendered

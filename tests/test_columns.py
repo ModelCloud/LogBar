@@ -39,5 +39,15 @@ def test_columns_auto_expand(capsys):
     assert cols_widths[0] >= len(longest_name)
 
     clean_header = _clean(last_header)
-    age_index = clean_header.find('age')
-    assert age_index == cols_widths[0] + 2
+    raw_cells = [cell for cell in clean_header.strip().split('|') if cell]
+
+    assert raw_cells[0].strip() == "name"
+    assert raw_cells[1].strip() == "age"
+    if len(raw_cells) >= 3:
+        assert raw_cells[2].strip() == "school"
+
+    assert len(raw_cells) == len(cols_widths)
+
+    for idx, cell in enumerate(raw_cells):
+        expected_len = cols_widths[idx] + (cols.padding * 2)
+        assert len(cell) == expected_len
