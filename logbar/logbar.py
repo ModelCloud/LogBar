@@ -171,22 +171,56 @@ class LogBar(logging.Logger):
         self.critical = self.critical_cls(logger=self)
 
     def _format_message(self, msg, args):
-        """Format a log message similarly to the stdlib logging module."""
+        """Format a log message while gracefully handling extra positional args."""
         if not args:
             return str(msg)
 
-        fmt_args = args
+        remaining = list(args)
+        parts = []
 
-        if len(args) == 1 and isinstance(args[0], dict):
-            fmt_args = args[0]
+        def consume_format(fmt, available):
+            if not isinstance(fmt, str):
+                return str(fmt), 0
 
-        if isinstance(msg, str):
-            try:
-                return msg % fmt_args
-            except (TypeError, ValueError):
-                pass
+            if not available:
+                return str(fmt), 0
 
-        return str(msg)
+            if len(available) == 1 and isinstance(available[0], dict):
+                try:
+                    return fmt % available[0], 1
+                except (TypeError, ValueError, KeyError):
+                    return str(fmt), 0
+
+            for end in range(len(available), 0, -1):
+                subset = tuple(available[:end])
+                try:
+                    return fmt % subset, end
+                except (TypeError, ValueError, KeyError):
+                    continue
+
+            return str(fmt), 0
+
+        current = msg
+        while True:
+            formatted, consumed = consume_format(current, remaining)
+            parts.append(formatted)
+            if consumed:
+                remaining = remaining[consumed:]
+
+            if not remaining:
+                break
+
+            next_candidate = remaining[0]
+            if isinstance(next_candidate, str) and '%' in next_candidate:
+                current = remaining.pop(0)
+                continue
+
+            break
+
+        if remaining:
+            parts.extend(str(arg) for arg in remaining)
+
+        return " ".join(part for part in parts if part)
 
     def _process(self, level: LEVEL, msg, *args, **kwargs):
         from logbar.progress import ProgressBar
