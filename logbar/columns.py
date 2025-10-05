@@ -217,6 +217,9 @@ class ColumnsPrinter:
             raw = value.strip()
             if not raw:
                 return None
+            lowered = raw.lower()
+            if lowered == "fit":
+                return ("fit", 0.0)
             if raw.endswith('%'):
                 try:
                     ratio = float(raw[:-1]) / 100.0
@@ -296,24 +299,42 @@ class ColumnsPrinter:
         for col_idx, spec in enumerate(self._columns):
             if spec.width is None:
                 continue
+            if spec.width[0] == "fit":
+                continue
             target = self._resolve_width_hint(spec.width, total_width)
             self._configure_column_width(col_idx, target)
 
         current_total = sum(self._column_total_width(idx) for idx in range(column_count))
+        has_fit = any(spec.width and spec.width[0] == "fit" for spec in self._columns)
+        has_percent = any(spec.width and spec.width[0] == "percent" for spec in self._columns)
         if current_total > total_width:
+            total_width = current_total
+
+        if has_fit and not self._target_width_hint and not has_percent:
             total_width = current_total
 
         remaining = max(0, total_width - current_total)
         expandable = [idx for idx, spec in enumerate(self._columns) if spec.width is None]
         if not expandable:
-            expandable = list(range(column_count))
+            expandable = [
+                idx
+                for idx, spec in enumerate(self._columns)
+                if spec.width is None or (spec.width and spec.width[0] != "fit")
+            ]
 
         while remaining > 0 and expandable:
+            progressed = False
             for col_idx in expandable:
                 if remaining <= 0:
                     break
+                spec = self._columns[col_idx]
+                if spec.width and spec.width[0] == "fit":
+                    continue
                 self._grow_column(col_idx, 1)
                 remaining -= 1
+                progressed = True
+            if not progressed:
+                break
 
         slot_count = self._slot_count()
         separator_count = slot_count + 1 if slot_count else 0

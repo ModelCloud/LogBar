@@ -184,3 +184,18 @@ def test_columns_respects_available_width():
     row_segment = header_line[header_line.index('|'):]
     expected = columns - (cols._level_max_length + 2)
     assert len(row_segment) == expected
+
+
+def test_columns_fit_width_matches_content():
+    cols = log.columns(cols=({"label": "tag", "width": "FiT"}, {"label": "message"}))
+
+    with mock.patch('logbar.logbar.terminal_size', return_value=(100, 24)):
+        cols.render()
+        cols.info("ok", "short message")
+        cols.info("verylongtagname", "another message")
+        cols.render()
+
+    widths = cols.widths
+    assert widths[0] == len("verylongtagname")
+    assert widths[1] == len("another message")
+    assert cols.column_specs[0].width == ('fit', 0.0)

@@ -21,7 +21,8 @@
 * `Once` logging: `log.info.once("this log msg will be only logged once")`
 * Progress Bar: `progress_bar = log.pb(100)`
 * Sticky Bottom Progress Bar: Default behavior!
-* Logging and Porgress Bar work hand-in-hand with no conflict: logs are printed before the progress bar
+* Columns/Rows (Table) alignment output with header spanning. 
+* Logging and Progress Bar work hand-in-hand with no conflict: logs are printed before the progress bar
 
 # Usage:
 
