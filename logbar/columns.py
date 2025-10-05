@@ -6,7 +6,7 @@
 """Column layout helpers for LogBar output."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .terminal import terminal_size
 
@@ -34,6 +34,7 @@ class ColumnsPrinter:
         width_hint: Optional[Union[str, int, float]] = None,
         level_enum: Any,
         level_max_length: int,
+        terminal_size_provider: Optional[Callable[[], Tuple[int, int]]] = None,
     ) -> None:
         self._logger = logger
         self._padding = max(padding, 0)
@@ -46,6 +47,7 @@ class ColumnsPrinter:
         self._current_total_width: Optional[int] = None
         self._level_enum = level_enum
         self._level_max_length = level_max_length
+        self._terminal_size = terminal_size_provider or terminal_size
 
         if headers:
             self._set_columns(headers)
@@ -242,7 +244,7 @@ class ColumnsPrinter:
 
     def _get_target_width(self) -> int:
         hint = self._target_width_hint
-        term_cols, _ = terminal_size()
+        term_cols, _ = self._terminal_size()
         if term_cols <= 0:
             term_cols = 80
 

@@ -186,6 +186,7 @@ class LogBar(logging.Logger):
             width_hint=width,
             level_enum=LEVEL,
             level_max_length=LEVEL_MAX_LENGTH,
+            terminal_size_provider=lambda: terminal_size(),
         )
 
     def _format_message(self, msg, args):
