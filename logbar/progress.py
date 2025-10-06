@@ -654,9 +654,19 @@ class ProgressBar:
         if not text:
             return ""
 
-        period = self._title_animation_period
+        period = max(self._title_animation_period, 1e-6)
         elapsed = time.time() - self._title_animation_start
-        highlight_idx = int(elapsed / max(period, 1e-6)) % max(len(text), 1)
+        text_len = len(text)
+
+        # pause for a couple of beats once the highlight reaches the end to calm flicker
+        pause_steps = 5
+        cycle_length = text_len + pause_steps
+        cycle_step = int(elapsed / period) % cycle_length
+
+        if cycle_step >= text_len:
+            highlight_idx = text_len - 1
+        else:
+            highlight_idx = cycle_step
 
         parts = [TITLE_BASE_COLOR]
         for idx, char in enumerate(text):
