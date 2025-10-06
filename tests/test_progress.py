@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
 import re
+import sys
 import time
 import unittest
 from contextlib import redirect_stdout
@@ -23,6 +25,7 @@ from time import sleep
 from unittest.mock import patch
 
 from logbar import LogBar
+from logbar.logbar import _active_progress_bars
 
 log = LogBar.shared(override_logger=True)
 
@@ -218,3 +221,59 @@ class TestProgress(unittest.TestCase):
 
         with redirect_stdout(StringIO()):
             pb.close()
+
+    def test_progress_bar_attach_detach_random_session(self):
+        rng = random.Random(1337)
+        duration = 10.0
+        detach_interval = 1.0
+        min_lifetime = 2.0
+
+        start = time.time()
+        last_detach = start
+        active = []
+        attachments = 0
+        detachments = 0
+
+        while time.time() - start < duration:
+            now = time.time()
+            log.info(f"session log {rng.random():.6f}")
+
+            target_count = rng.randint(1, 4)
+            while len(active) < target_count:
+                total = rng.randint(5, 20)
+                pb = log.pb(range(total)).manual()
+                pb.current_iter_step = 0
+                pb.draw()
+                active.append({
+                    "pb": pb,
+                    "attached_at": time.time(),
+                    "total": total,
+                })
+                attachments += 1
+
+            for entry in list(active):
+                pb = entry["pb"]
+                if pb.current_iter_step < entry["total"]:
+                    pb.current_iter_step += 1
+                pb.draw()
+
+            if now - last_detach >= detach_interval and active:
+                candidates = [entry for entry in active if now - entry["attached_at"] >= min_lifetime]
+                if candidates:
+                    victim = rng.choice(candidates)
+                    victim["pb"].close()
+                    active.remove(victim)
+                    detachments += 1
+                    last_detach = now
+
+            sys.stdout.flush()
+            sleep(0.25)
+
+        for entry in active:
+            entry["pb"].close()
+        active.clear()
+
+        self.assertGreaterEqual(time.time() - start, duration)
+        self.assertGreaterEqual(attachments, 1)
+        self.assertGreaterEqual(detachments, 1)
+        self.assertEqual(_active_progress_bars(), [])
