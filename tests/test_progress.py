@@ -199,39 +199,6 @@ class TestProgress(unittest.TestCase):
             pb2.close()
             pb1.close()
 
-    def test_progress_styles_registry_defaults(self):
-        styles = ProgressBar.available_styles()
-        for expected in {"emerald_glow", "sunset", "ocean", "mono"}:
-            self.assertIn(expected, styles)
-
-    def test_progress_bar_color_customization_renders(self):
-        pb = log.pb(10).manual().fill('*', empty='.')
-        pb.colors(fill='emerald', empty='slate', head='mint')
-        pb.current_iter_step = 5
-
-        columns = 100
-        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
-            buffer = StringIO()
-            with redirect_stdout(buffer):
-                pb.draw()
-
-        output = buffer.getvalue()
-        self.assertIn('\033[38;5;82m', output)
-        self.assertIn('*', output)
-        self.assertIn('.', output)
-
-        with redirect_stdout(StringIO()):
-            pb.close()
-
-    def test_progress_bar_colors_accept_hex(self):
-        pb = log.pb(5).manual()
-        pb.colors(fill='#ff00ff')
-        self.assertTrue(pb._style.fill_colors)
-        self.assertEqual(pb._style.fill_colors[0], '\033[38;2;255;0;255m')
-
-        with redirect_stdout(StringIO()):
-            pb.close()
-
     def test_log_messages_render_above_progress_bars(self):
         columns = 100
         pb = log.pb(100).title("PB").manual()

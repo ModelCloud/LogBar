@@ -250,9 +250,9 @@ def _register_default_styles() -> dict[str, ProgressStyle]:
 
 
 _STYLE_COLOR_NAMES = {
-    "emerald": _fg_256(82),
-    "spring": _fg_256(121),
-    "mint": _fg_256(120),
+    "emerald": _fg_rgb(47, 107, 85),
+    "spring": _fg_rgb(72, 160, 120),
+    "mint": _fg_rgb(152, 214, 173),
     "slate": _fg_256(240),
     "amber": _fg_256(214),
     "peach": _fg_256(217),

@@ -19,12 +19,11 @@
 # Features
 
 - Shared singleton logger with per-level colorized output.
-- Sticky Progress bars that stay at the bottom while your logs flow freely.
-- Stackable multiple progress bars you can attach and detach on the fly
-- Styling for progress bar fills/colors
-- Psuedo `running` progress bar title using character color flow 
-- Column-aware table printer with spans, width hints, and `fit` sizing.
 - `once` helpers prevent duplicate log spam automatically.
+- Stackable progress bars that stay anchored while your logs flow freely.
+- Built-in styling for progress bar fills, colors, gradients, and head glyphs.
+- Animated progress titles with a subtle sweeping highlight.
+- Column-aware table printer with spans, width hints, and `fit` sizing.
 - Zero dependencies; works anywhere Python runs.
 
 # Installation
@@ -147,7 +146,7 @@ pb.style('sunset')  # bundled gradients: emerald_glow, sunset, ocean, matrix, mo
 pb.fill('▓', empty='·')  # override glyphs
 pb.colors(fill=['#ff9500', '#ff2d55'], head='mint')  # custom palette, optional head accent
 pb.colors(empty='slate')  # tint the empty track
-pb.head('>', color='82')  # custom head glyph + colour index
+pb.head('>', color='82')  # custom head glyph + color index
 ```
 
 `ProgressBar.available_styles()` lists builtin styles, and you can register additional ones with `ProgressBar.register_style(...)` or switch defaults globally via `ProgressBar.set_default_style(...)`. Custom colors accept ANSI escape codes, 256-color indexes (e.g. `'82'`), or hex strings (`'#4c1d95'`).
