@@ -100,8 +100,15 @@ class ProgressBar:
         if len(title) > self.max_title_len:
             self.max_title_len = len(title)
 
+        previous_title = self._title
         self._title = title
-        self._title_animation_start = time.time()
+
+        # Only reset the animation clock when transitioning from no title to
+        # an initial title. For dynamic titles (updated every frame) we want
+        # to preserve the elapsed time so the highlight keeps sweeping across
+        # the text instead of snapping back to the first character.
+        if not previous_title and title:
+            self._title_animation_start = time.time()
         return self
 
     def subtitle(self, subtitle: str):
