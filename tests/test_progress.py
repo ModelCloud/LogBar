@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
+import re
+import sys
+import time
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -21,8 +25,36 @@ from time import sleep
 from unittest.mock import patch
 
 from logbar import LogBar
+from logbar.progress import ProgressBar
+from logbar.logbar import _active_progress_bars
 
 log = LogBar.shared(override_logger=True)
+
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def extract_rendered_lines(buffer: str):
+    cleaned = ANSI_ESCAPE_RE.sub('', buffer)
+    lines = []
+    accumulator = []
+
+    for char in cleaned:
+        if char == '\r':
+            if accumulator:
+                lines.append(''.join(accumulator))
+                accumulator = []
+        elif char == '\n':
+            if accumulator:
+                lines.append(''.join(accumulator))
+                accumulator = []
+        else:
+            accumulator.append(char)
+
+    if accumulator:
+        lines.append(''.join(accumulator))
+
+    return [line for line in lines if line]
 
 def generate_expanding_str_a_to_z():
     strings = []
@@ -66,7 +98,7 @@ class TestProgress(unittest.TestCase):
             log.info(f"random log: {count}")
             count += 1
             pb.title(f"[TITLE: {i}]").subtitle(f"[SUBTITLE: {i}]").draw()
-            sleep(0.2)
+            sleep(0.1)
 
     def test_range_manual(self):
         pb = log.pb(range(100)).manual()
@@ -111,11 +143,12 @@ class TestProgress(unittest.TestCase):
             with redirect_stdout(buffer):
                 pb.draw()
 
-        output = buffer.getvalue()
-        self.assertTrue(output.startswith('\r'))
-        rendered_line = output.lstrip('\r')
+        lines = extract_rendered_lines(buffer.getvalue())
+        self.assertTrue(lines, "expected at least one rendered line")
+        self.assertEqual(len(lines[-1]), columns)
 
-        self.assertEqual(len(rendered_line), columns)
+        with redirect_stdout(StringIO()):
+            pb.close()
 
     def test_draw_without_terminal_state(self):
         pb = log.pb(10).manual()
@@ -129,3 +162,119 @@ class TestProgress(unittest.TestCase):
 
         output = buffer.getvalue()
         self.assertIn('[5/10]', output)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
+    def test_progress_bars_stack_latest_bottom(self):
+        columns = 80
+        pb1 = log.pb(100).title("PB1").manual()
+        pb2 = log.pb(100).title("PB2").manual()
+
+        pb1.current_iter_step = 25
+        pb2.current_iter_step = 50
+
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+            start = time.time()
+            loop = 0
+            while time.time() - start < 2.5:
+                loop += 1
+                pb1.current_iter_step = min(len(pb1), 25 + loop)
+                pb1.draw()
+                pb2.current_iter_step = min(len(pb2), 50 + loop * 2)
+                pb2.draw()
+                sleep(0.05)
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb1.draw()
+                pb2.draw()
+
+        lines = extract_rendered_lines(buffer.getvalue())
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertIn('PB1', lines[-2])
+        self.assertIn('PB2', lines[-1])
+
+        with redirect_stdout(StringIO()):
+            pb2.close()
+            pb1.close()
+
+    def test_log_messages_render_above_progress_bars(self):
+        columns = 100
+        pb = log.pb(100).title("PB").manual()
+        pb.current_iter_step = 10
+
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+                log.info("hello world")
+
+        lines = extract_rendered_lines(buffer.getvalue())
+
+        info_indices = [idx for idx, line in enumerate(lines) if 'INFO' in line]
+        pb_indices = [idx for idx, line in enumerate(lines) if '| ' in line]
+
+        self.assertTrue(info_indices, "expected a logged INFO line in output")
+        self.assertTrue(pb_indices, "expected a progress bar line in output")
+        self.assertLess(info_indices[-1], pb_indices[-1])
+        self.assertIn('PB', lines[pb_indices[-1]])
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
+    def test_progress_bar_attach_detach_random_session(self):
+        rng = random.Random(1337)
+        duration = 10.0
+        detach_interval = 1.0
+        min_lifetime = 2.0
+
+        start = time.time()
+        last_detach = start
+        active = []
+        attachments = 0
+        detachments = 0
+
+        while time.time() - start < duration:
+            now = time.time()
+            log.info(f"session log {rng.random():.6f}")
+
+            target_count = rng.randint(1, 4)
+            while len(active) < target_count:
+                total = rng.randint(5, 20)
+                pb = log.pb(range(total)).manual()
+                pb.current_iter_step = 0
+                pb.draw()
+                active.append({
+                    "pb": pb,
+                    "attached_at": time.time(),
+                    "total": total,
+                })
+                attachments += 1
+
+            for entry in list(active):
+                pb = entry["pb"]
+                if pb.current_iter_step < entry["total"]:
+                    pb.current_iter_step += 1
+                pb.draw()
+
+            if now - last_detach >= detach_interval and active:
+                candidates = [entry for entry in active if now - entry["attached_at"] >= min_lifetime]
+                if candidates:
+                    victim = rng.choice(candidates)
+                    victim["pb"].close()
+                    active.remove(victim)
+                    detachments += 1
+                    last_detach = now
+
+            sys.stdout.flush()
+            sleep(0.25)
+
+        for entry in active:
+            entry["pb"].close()
+        active.clear()
+
+        self.assertGreaterEqual(time.time() - start, duration)
+        self.assertGreaterEqual(attachments, 1)
+        self.assertGreaterEqual(detachments, 1)
+        self.assertEqual(_active_progress_bars(), [])

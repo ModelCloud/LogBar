@@ -1,4 +1,5 @@
 import io
+import threading
 from contextlib import redirect_stdout
 import unittest
 from unittest import mock
@@ -80,3 +81,29 @@ class TestProgressBar(unittest.TestCase):
             with self.subTest(args=args):
                 output = self.capture_log(log.info, *args)
                 self.assertIn(expected, output)
+
+    def test_concurrent_logging_thread_safe(self):
+        thread_count = 5
+        iterations = 20
+        barrier = threading.Barrier(thread_count)
+
+        def worker(thread_idx: int) -> None:
+            barrier.wait()
+            for i in range(iterations):
+                log.info(f"thread-{thread_idx}-{i}")
+
+        threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(thread_count)]
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
+        message_lines = [line for line in lines if "thread-" in line]
+
+        self.assertEqual(len(message_lines), thread_count * iterations)
+        for line in message_lines:
+            self.assertIn("thread-", line)
