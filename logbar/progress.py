@@ -11,7 +11,7 @@ from typing import Iterable, Optional, Union
 from warnings import warn
 
 from . import LogBar
-from .logbar import update_last_pb_instance
+from .logbar import update_last_pb_instance, render_lock
 from .terminal import terminal_size
 from .util import auto_iterable
 
@@ -206,9 +206,9 @@ class ProgressBar:
                 plain_out += pad
                 rendered_out += pad
 
-        print(f'\r{rendered_out}', end=end, flush=True)
-
-        update_last_pb_instance(src=self)  # let logger now we logged
+        with render_lock():
+            print(f'\r{rendered_out}', end=end, flush=True)
+            update_last_pb_instance(src=self)  # let logger know we logged
 
     def _animated_text(self, text: str) -> str:
         if not text:

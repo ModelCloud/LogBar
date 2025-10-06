@@ -4,6 +4,7 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import logging
+import threading
 from enum import Enum
 from typing import Iterable, Optional, Sequence, Union
 
@@ -15,9 +16,21 @@ logger = None
 last_pb_instance = None # one for logger, 2 for progressbar
 last_rendered_length = 0
 
+_STATE_LOCK = threading.RLock()
+_RENDER_LOCK = threading.RLock()
+
 def update_last_pb_instance(src) -> None:
+    """Record the most recent `ProgressBar` instance in a thread-safe way."""
+
     global last_pb_instance
-    last_pb_instance = src
+    with _STATE_LOCK:
+        last_pb_instance = src
+
+
+def render_lock() -> threading.RLock:
+    """Provide access to the shared render lock used for stdout writes."""
+
+    return _RENDER_LOCK
 
 # ANSI color codes
 COLORS = {
@@ -46,33 +59,37 @@ class LogBar(logging.Logger):
     # return a shared global/singleton logger
     def shared(cls, override_logger: Optional[bool] = False):
         global logger
-        if logger is not None:
-            return logger
 
-        # save logger class
-        if not override_logger:
-            original_logger_cls = logging.getLoggerClass()
+        created_logger = False
+        shared_logger = None
 
-        logging.setLoggerClass(LogBar)
+        with _STATE_LOCK:
+            if logger is not None:
+                return logger
 
-        logger = logging.getLogger("logbar")
+            original_logger_cls = None
 
-        # restore logger cls
-        if not override_logger:
-            logging.setLoggerClass(original_logger_cls)
+            if not override_logger:
+                original_logger_cls = logging.getLoggerClass()
 
-        logger.propagate = False
-        logger.setLevel(logging.INFO)
+            logging.setLoggerClass(LogBar)
+            try:
+                logger = logging.getLogger("logbar")
+            finally:
+                if not override_logger and original_logger_cls is not None:
+                    logging.setLoggerClass(original_logger_cls)
 
-        # handler = logging.StreamHandler(sys.stdout)
-        # handler.setFormatter(formatter)
-        # handler.flush = sys.stdout.flush
-        # logger.addHandler(handler)
+            logger.propagate = False
+            logger.setLevel(logging.INFO)
+            created_logger = True
+            shared_logger = logger
 
-        # clear space from previous logs
-        print("", end='\n', flush=True)
+        if created_logger:
+            with _RENDER_LOCK:
+                # clear space from previous logs
+                print("", end='\n', flush=True)
 
-        return logger
+        return shared_logger
 
 
     def pb(self, iterable: Iterable):
@@ -82,13 +99,15 @@ class LogBar(logging.Logger):
 
     def history_add(self, msg) -> bool:
         h = hash(msg) # TODO only msg is checked not level + msg
-        if h in self.history:
-            return False # add failed since it already exists
 
-        if len(self.history) > self.history_limit:
-            self.history.clear()
+        with self._history_lock:
+            if h in self.history:
+                return False # add failed since it already exists
 
-        self.history.add(h)
+            if len(self.history) > self.history_limit:
+                self.history.clear()
+
+            self.history.add(h)
 
         return True
 
@@ -160,6 +179,9 @@ class LogBar(logging.Logger):
         self.info = self.info_cls(logger=self)
         self.error = self.error_cls(logger=self)
         self.critical = self.critical_cls(logger=self)
+
+        self.history = set()
+        self._history_lock = threading.Lock()
 
     def columns(self, *headers, cols: Optional[Sequence] = None, width: Optional[Union[str, int, float]] = None, padding: int = 2):
         """Return a column-aware helper that keeps column widths aligned."""
@@ -245,41 +267,50 @@ class LogBar(logging.Logger):
         from logbar.progress import ProgressBar
 
         global last_rendered_length
-        columns, _ = terminal_size()
+        global last_pb_instance
+
         str_msg = self._format_message(msg, args)
 
-        line_length = len(level.value) + (LEVEL_MAX_LENGTH - len(level.value)) + 1 + len(str_msg)
+        with _RENDER_LOCK:
+            columns, _ = terminal_size()
 
-        if columns > 0:
-            padding_needed = max(0, columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))
-            str_msg += " " * padding_needed  # -2 for cursor + space between LEVEL and msg
-            printable_length = columns
-            last_rendered_length = printable_length
-        else:
-            printable_length = line_length
-            if last_rendered_length > printable_length:
-                str_msg += " " * (last_rendered_length - printable_length)
+            with _STATE_LOCK:
+                previous_render_length = last_rendered_length
+                active_progress = last_pb_instance
+                shared_logger = logger
 
-        global last_pb_instance
-        if isinstance(last_pb_instance, ProgressBar) and not last_pb_instance.closed:
-            print('\r',end='',flush=True)
+            line_length = len(level.value) + (LEVEL_MAX_LENGTH - len(level.value)) + 1 + len(str_msg)
 
-        # Get the color for the log level
-
-        reset = COLORS["RESET"]
-        color = COLORS.get(level.value, reset)
-
-        level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
-        print(f"\r{color}{level.value}{reset}{level_padding} {str_msg}", end='\n', flush=True)
-
-        if columns <= 0:
-            last_rendered_length = printable_length
-
-        if isinstance(last_pb_instance, ProgressBar):
-            if not last_pb_instance.closed:
-                # only do this for our instance
-                if self == logger:
-                    #print('\r', end='', flush=True)
-                    last_pb_instance.draw()
+            if columns > 0:
+                padding_needed = max(0, columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))
+                rendered_message = f"{str_msg}{' ' * padding_needed}"
+                printable_length = columns
             else:
-                last_pb_instance = None
+                printable_length = line_length
+                excess_padding = max(0, previous_render_length - printable_length)
+                rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
+
+            if isinstance(active_progress, ProgressBar) and not active_progress.closed:
+                print('\r', end='', flush=True)
+
+            reset = COLORS["RESET"]
+            color = COLORS.get(level.value, reset)
+
+            level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
+            print(f"\r{color}{level.value}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
+
+            with _STATE_LOCK:
+                last_rendered_length = printable_length
+
+            progress_to_draw = None
+
+            if isinstance(active_progress, ProgressBar):
+                if active_progress.closed:
+                    with _STATE_LOCK:
+                        if last_pb_instance is active_progress:
+                            last_pb_instance = None
+                elif self == shared_logger:
+                    progress_to_draw = active_progress
+
+            if progress_to_draw is not None:
+                progress_to_draw.draw()
