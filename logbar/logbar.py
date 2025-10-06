@@ -6,6 +6,7 @@
 import logging
 import sys
 import threading
+import time
 from enum import Enum
 from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
@@ -29,6 +30,9 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
 
 _attached_progress_bars = []  # type: list["ProgressBar"]
 _last_drawn_progress_count = 0
+_refresh_thread: Optional[threading.Thread] = None
+_REFRESH_INTERVAL_SECONDS = 0.1
+_last_active_draw = 0.0
 
 
 def attach_progress_bar(pb: "ProgressBar") -> None:
@@ -37,6 +41,8 @@ def attach_progress_bar(pb: "ProgressBar") -> None:
     with _STATE_LOCK:
         if pb not in _attached_progress_bars:
             _attached_progress_bars.append(pb)
+        _record_progress_activity_locked()
+    _ensure_background_refresh_thread()
 
 
 def detach_progress_bar(pb: "ProgressBar") -> None:
@@ -45,6 +51,7 @@ def detach_progress_bar(pb: "ProgressBar") -> None:
     with _STATE_LOCK:
         if pb in _attached_progress_bars:
             _attached_progress_bars.remove(pb)
+        _record_progress_activity_locked()
 
 
 def _clear_progress_stack_locked() -> None:
@@ -126,6 +133,7 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
 
     sys.stdout.flush()
     _last_drawn_progress_count = len(lines)
+    _record_progress_activity_locked()
 
 
 def render_progress_stack(lock_held: bool = False, precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
@@ -136,6 +144,72 @@ def render_progress_stack(lock_held: bool = False, precomputed: Optional[dict] =
     else:
         with _RENDER_LOCK:
             _render_progress_stack_locked(precomputed=precomputed, columns_hint=columns_hint)
+
+
+def _record_progress_activity_locked() -> None:
+    global _last_active_draw
+    _last_active_draw = time.monotonic()
+
+
+def _record_progress_activity() -> None:
+    with _STATE_LOCK:
+        _record_progress_activity_locked()
+
+
+def _should_refresh_in_background(now: float) -> bool:
+    stdout = sys.stdout
+    isatty = getattr(stdout, "isatty", None)
+    if callable(isatty):
+        try:
+            return bool(isatty())
+        except Exception:  # pragma: no cover - defensive: prefer dropping animation over crashing
+            return False
+    return False
+
+
+def _progress_refresh_worker() -> None:
+    while True:
+        time.sleep(_REFRESH_INTERVAL_SECONDS)
+
+        now = time.monotonic()
+        with _STATE_LOCK:
+            has_progress = bool(_attached_progress_bars)
+            last_active = _last_active_draw
+
+        if not has_progress:
+            continue
+
+        if now - last_active < _REFRESH_INTERVAL_SECONDS:
+            continue
+
+        if not _should_refresh_in_background(now):
+            continue
+
+        try:
+            if not _RENDER_LOCK.acquire(blocking=False):
+                continue
+            try:
+                _render_progress_stack_locked()
+            finally:
+                _RENDER_LOCK.release()
+        except Exception:
+            continue
+
+
+def _ensure_background_refresh_thread() -> None:
+    global _refresh_thread
+
+    with _STATE_LOCK:
+        if _refresh_thread is not None and _refresh_thread.is_alive():
+            return
+
+        thread = threading.Thread(
+            target=_progress_refresh_worker,
+            name="logbar-progress-refresh",
+            daemon=True,
+        )
+        _refresh_thread = thread
+        thread.start()
 
 # ANSI color codes
 COLORS = {
@@ -170,29 +244,34 @@ class LogBar(logging.Logger):
 
         with _STATE_LOCK:
             if logger is not None:
-                return logger
+                shared_logger = logger
+            else:
+                original_logger_cls = None
 
-            original_logger_cls = None
+                if not override_logger:
+                    original_logger_cls = logging.getLoggerClass()
 
-            if not override_logger:
-                original_logger_cls = logging.getLoggerClass()
+                logging.setLoggerClass(LogBar)
+                try:
+                    logger = logging.getLogger("logbar")
+                finally:
+                    if not override_logger and original_logger_cls is not None:
+                        logging.setLoggerClass(original_logger_cls)
 
-            logging.setLoggerClass(LogBar)
-            try:
-                logger = logging.getLogger("logbar")
-            finally:
-                if not override_logger and original_logger_cls is not None:
-                    logging.setLoggerClass(original_logger_cls)
+                logger.propagate = False
+                logger.setLevel(logging.INFO)
+                created_logger = True
+                shared_logger = logger
 
-            logger.propagate = False
-            logger.setLevel(logging.INFO)
-            created_logger = True
-            shared_logger = logger
+        if shared_logger is None:
+            shared_logger = logging.getLogger("logbar")
 
         if created_logger:
             with _RENDER_LOCK:
                 # clear space from previous logs
                 print("", end='\n', flush=True)
+
+        _ensure_background_refresh_thread()
 
         return shared_logger
 

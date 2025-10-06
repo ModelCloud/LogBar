@@ -14,6 +14,7 @@ from . import LogBar
 from .logbar import (
     attach_progress_bar,
     detach_progress_bar,
+    _record_progress_activity,
     render_lock,
     render_progress_stack,
 )
@@ -156,6 +157,7 @@ class ProgressBar:
         return self
 
     def draw(self):
+        _record_progress_activity()
         if not self._attached:
             columns, _ = terminal_size()
             rendered_line = self._render_snapshot(columns)

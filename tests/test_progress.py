@@ -94,7 +94,7 @@ class TestProgress(unittest.TestCase):
             log.info(f"random log: {count}")
             count += 1
             pb.title(f"[TITLE: {i}]").subtitle(f"[SUBTITLE: {i}]").draw()
-            sleep(0.2)
+            sleep(0.1)
 
     def test_range_manual(self):
         pb = log.pb(range(100)).manual()
