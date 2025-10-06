@@ -19,9 +19,12 @@
 # Features
 
 - Shared singleton logger with per-level colorized output.
+- Sticky Progress bars that stay at the bottom while your logs flow freely.
+- Stackable multiple progress bars you can attach and detach on the fly
+- Styling for progress bar fills/colors
+- Psuedo `running` progress bar title using character color flow 
+- Column-aware table printer with spans, width hints, and `fit` sizing.
 - `once` helpers prevent duplicate log spam automatically.
-- Progress bars that stay at the bottom while your logs flow freely.
-- Column-aware tabular printer with spans, width hints, and `fit` sizing.
 - Zero dependencies; works anywhere Python runs.
 
 # Installation
@@ -107,6 +110,54 @@ INFO  Processing [##########------------]  40%  (8/20) in-flight: step-8
 
 The bar always re-renders at the bottom, so log lines never overwrite your progress.
 
+### Multiple Progress Bars
+
+LogBar keeps each progress bar on its own line and restacks them whenever they redraw. Later bars always appear closest to the live log output.
+
+```py
+pb_fetch = log.pb(range(80)).title("Fetch").manual()
+pb_train = log.pb(range(120)).title("Train").manual()
+
+for _ in pb_fetch:
+    pb_fetch.draw()
+    time.sleep(0.01)
+
+for _ in pb_train:
+    pb_train.draw()
+    time.sleep(0.01)
+
+pb_train.close()
+pb_fetch.close()
+```
+
+Sample stacked output (plain-text view):
+
+```
+INFO  Fetch  [███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░] |  58.8% 00:00:46 / 00:01:19
+INFO  Train  [█████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] |  37.5% 00:01:15 / 00:03:20
+```
+
+## Progress Bar Styling
+
+Pick from bundled palettes or create your own blocks and colors:
+
+```py
+pb = log.pb(250)
+pb.style('sunset')  # bundled gradients: emerald_glow, sunset, ocean, matrix, mono
+pb.fill('▓', empty='·')  # override glyphs
+pb.colors(fill=['#ff9500', '#ff2d55'], head='mint')  # custom palette, optional head accent
+pb.colors(empty='slate')  # tint the empty track
+pb.head('>', color='82')  # custom head glyph + colour index
+```
+
+`ProgressBar.available_styles()` lists builtin styles, and you can register additional ones with `ProgressBar.register_style(...)` or switch defaults globally via `ProgressBar.set_default_style(...)`. Custom colors accept ANSI escape codes, 256-color indexes (e.g. `'82'`), or hex strings (`'#4c1d95'`).
+
+Styled output (plain-text view with ANSI removed):
+
+```
+INFO  Upload  [▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉···········] |  62.0% 00:01:48 / 00:02:52
+```
+
 # Columns (Table) 
 
 Use `log.columns(...)` to format aligned tables while logging data streams. Print the column header per context with `cols.info.header()` (or `cols.warn.header()`, etc.). Columns support spans and three width hints:
@@ -185,7 +236,3 @@ with log.pb(items).manual() as pb:
 - Combine columns and progress bars by logging summaries at key checkpoints.
 - Use `log.warn.once(...)` to keep noisy health checks readable.
 - For multi-line messages, pre-format text and pass it as a single string; LogBar keeps borders intact.
-
-# Pending Features
-
-- Multiple active progress bars
