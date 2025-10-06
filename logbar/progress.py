@@ -7,11 +7,19 @@ import datetime
 import sys
 import time
 from enum import Enum
-from typing import Iterable, Optional, Union
+from typing import Iterable, Optional, Union, TYPE_CHECKING
 from warnings import warn
 
 from . import LogBar
-from .logbar import update_last_pb_instance, render_lock
+from .logbar import (
+    attach_progress_bar,
+    detach_progress_bar,
+    render_lock,
+    render_progress_stack,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - type hints without runtime import cycle
+    from .logbar import LogBar as LogBarType
 from .terminal import terminal_size
 from .util import auto_iterable
 
@@ -37,7 +45,7 @@ class RenderMode(str, Enum):
 
 
 class ProgressBar:
-    def __init__(self, iterable: Union[Iterable, int, dict, set]):
+    def __init__(self, iterable: Union[Iterable, int, dict, set], owner: Optional["LogBarType"] = None):
         self._iterating = False # state: in init or active iteration
 
         self._render_mode = RenderMode.AUTO
@@ -63,6 +71,11 @@ class ProgressBar:
 
         self.ui_show_left_steps = True # show [1 of 100] on left side
         self.ui_show_left_steps_offset = 0
+
+        self._owner_logger = owner
+        self._attached_logger: Optional["LogBarType"] = None
+        self._attached = False
+        self._last_rendered_line = ""
 
     def set(self,
             show_left_steps: Optional[bool] = None,
@@ -112,48 +125,54 @@ class ProgressBar:
         self._render_mode = RenderMode.MANUAL
         return self
 
+    def attach(self, logger: Optional["LogBarType"] = None):
+        if self.closed:
+            return self
+
+        if self._attached:
+            return self
+
+        target_logger = logger or self._owner_logger or LogBar.shared()
+        self._attached_logger = target_logger
+        self._owner_logger = target_logger
+        attach_progress_bar(self)
+        self._attached = True
+        with render_lock():
+            render_progress_stack(lock_held=True)
+
+        return self
+
+    def detach(self):
+        if not self._attached:
+            return self
+
+        with render_lock():
+            detach_progress_bar(self)
+            render_progress_stack(lock_held=True)
+
+        self._attached = False
+        self._attached_logger = None
+        self._last_rendered_line = ""
+        return self
+
     def draw(self):
+        if not self._attached:
+            columns, _ = terminal_size()
+            rendered_line = self._render_snapshot(columns)
+
+            with render_lock():
+                print(f'\r{rendered_line}', end='', flush=True)
+            return
+
         columns, _ = terminal_size()
+        rendered_line = self._render_snapshot(columns)
 
-        pre_bar_size = 0 # char length of content before progress bar
-
-        percent_num = self.step() / float(len(self))
-        percent = ("{0:.1f}").format(100 * (percent_num))
-        log = f"{self.calc_time(self.step())} [{self.step()}/{len(self)}] {percent}%"
-
-        if self._title:
-            pre_bar_size += self.max_title_len + 1 # title_ (_ == space)
-        if self._subtitle:
-            pre_bar_size += self.max_subtitle_len + 1 # subtitle_ (_ == space)
-
-        # generate: ui_left_steps
-        if self.ui_show_left_steps:
-            self.ui_show_left_steps_text = f"[{self.step()-self.ui_show_left_steps_offset} of {len(self)-self.ui_show_left_steps_offset}] "
-            self.ui_show_left_steps_text_max_len = len(self.ui_show_left_steps_text)
-            pre_bar_size += self.ui_show_left_steps_text_max_len
-
-        padding = ""
-
-        # calculate padding
-        if self._title and len(self._title) < self.max_title_len:
-            padding += " " * (self.max_title_len - len(self._title))
-
-        # calculate padding
-        if self._subtitle and len(self._subtitle) < self.max_subtitle_len:
-            padding += " " * (self.max_subtitle_len - len(self._subtitle))
-
-        # Allocate space for the progress bar itself. The visual output consists of the
-        # content before the bar (title, subtitle, step counter), the bar, and the
-        # trailing "| " separator plus the textual log. The separator is two
-        # characters wide, so we only need to subtract those two characters from the
-        # available columns. Subtracting an extra character caused the rendered line
-        # to fall short of the terminal width which was noticeable when resizing the
-        # terminal window.
-        bar_length = max(0, columns - pre_bar_size - len(log) - 2)
-
-        filled_length = int(bar_length * self.step() // len(self))
-        bar = self._fill * filled_length + '-' * (bar_length - filled_length)
-        self.log(bar=bar, log=log, pre_bar_padding=padding, end='', columns=columns) # '\n' if percent_num >= 1.0 else ''
+        with render_lock():
+            render_progress_stack(
+                lock_held=True,
+                precomputed={self: rendered_line},
+                columns_hint=columns,
+            )
 
     def calc_time(self, iteration):
         used_time = int(time.time() - self.time)
@@ -161,7 +180,56 @@ class ProgressBar:
         remaining = str(datetime.timedelta(seconds=int((used_time / max(iteration, 1)) * len(self))))
         return f"{formatted_time} / {remaining}"
 
-    def log(self, bar:str, log:str, pre_bar_padding:str = "", end: str = "", columns: Optional[int] = None):
+    def _render_snapshot(self, columns: Optional[int] = None) -> str:
+        if columns is None:
+            columns, _ = terminal_size()
+
+        total_steps = len(self)
+        effective_total = total_steps if total_steps else 1
+
+        percent_num = self.step() / float(effective_total)
+        percent = ("{0:.1f}").format(100 * percent_num)
+        log_text = f"{self.calc_time(self.step())} [{self.step()}/{total_steps}] {percent}%"
+
+        pre_bar_size = 0
+
+        if self._title:
+            pre_bar_size += self.max_title_len + 1
+        if self._subtitle:
+            pre_bar_size += self.max_subtitle_len + 1
+
+        if self.ui_show_left_steps:
+            left_current = self.step() - self.ui_show_left_steps_offset
+            left_total = total_steps - self.ui_show_left_steps_offset
+            self.ui_show_left_steps_text = f"[{left_current} of {left_total}] "
+            self.ui_show_left_steps_text_max_len = len(self.ui_show_left_steps_text)
+            pre_bar_size += self.ui_show_left_steps_text_max_len
+
+        padding = ""
+
+        if self._title and len(self._title) < self.max_title_len:
+            padding += " " * (self.max_title_len - len(self._title))
+
+        if self._subtitle and len(self._subtitle) < self.max_subtitle_len:
+            padding += " " * (self.max_subtitle_len - len(self._subtitle))
+
+        available_columns = columns if columns is not None and columns > 0 else 0
+
+        bar_length = max(0, available_columns - pre_bar_size - len(log_text) - 2) if available_columns else 0
+        filled_length = int(bar_length * self.step() // effective_total) if bar_length else 0
+        bar = self._fill * filled_length + '-' * (bar_length - filled_length)
+
+        rendered_line = self._render_line(
+            bar=bar,
+            log_text=log_text,
+            pre_bar_padding=padding,
+            columns=columns,
+        )
+
+        self._last_rendered_line = rendered_line
+        return rendered_line
+
+    def _render_line(self, bar: str, log_text: str, pre_bar_padding: str = "", columns: Optional[int] = None) -> str:
         segments_plain = []
         segments_rendered = []
 
@@ -192,7 +260,7 @@ class ProgressBar:
             else:
                 append_segment(left_steps_text)
 
-        append_segment(f"{bar}| {log}")
+        append_segment(f"{bar}| {log_text}")
 
         plain_out = ''.join(segments_plain)
         rendered_out = ''.join(segments_rendered)
@@ -206,9 +274,7 @@ class ProgressBar:
                 plain_out += pad
                 rendered_out += pad
 
-        with render_lock():
-            print(f'\r{rendered_out}', end=end, flush=True)
-            update_last_pb_instance(src=self)  # let logger know we logged
+        return rendered_out
 
     def _animated_text(self, text: str) -> str:
         if not text:
@@ -346,4 +412,8 @@ class ProgressBar:
         return
 
     def close(self):
+        if self.closed:
+            return
+
         self.closed = True
+        self.detach()

@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
+import time
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -23,6 +25,32 @@ from unittest.mock import patch
 from logbar import LogBar
 
 log = LogBar.shared(override_logger=True)
+
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def extract_rendered_lines(buffer: str):
+    cleaned = ANSI_ESCAPE_RE.sub('', buffer)
+    lines = []
+    accumulator = []
+
+    for char in cleaned:
+        if char == '\r':
+            if accumulator:
+                lines.append(''.join(accumulator))
+                accumulator = []
+        elif char == '\n':
+            if accumulator:
+                lines.append(''.join(accumulator))
+                accumulator = []
+        else:
+            accumulator.append(char)
+
+    if accumulator:
+        lines.append(''.join(accumulator))
+
+    return [line for line in lines if line]
 
 def generate_expanding_str_a_to_z():
     strings = []
@@ -111,11 +139,12 @@ class TestProgress(unittest.TestCase):
             with redirect_stdout(buffer):
                 pb.draw()
 
-        output = buffer.getvalue()
-        self.assertTrue(output.startswith('\r'))
-        rendered_line = output.lstrip('\r')
+        lines = extract_rendered_lines(buffer.getvalue())
+        self.assertTrue(lines, "expected at least one rendered line")
+        self.assertEqual(len(lines[-1]), columns)
 
-        self.assertEqual(len(rendered_line), columns)
+        with redirect_stdout(StringIO()):
+            pb.close()
 
     def test_draw_without_terminal_state(self):
         pb = log.pb(10).manual()
@@ -129,3 +158,63 @@ class TestProgress(unittest.TestCase):
 
         output = buffer.getvalue()
         self.assertIn('[5/10]', output)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
+    def test_progress_bars_stack_latest_bottom(self):
+        columns = 80
+        pb1 = log.pb(100).title("PB1").manual()
+        pb2 = log.pb(100).title("PB2").manual()
+
+        pb1.current_iter_step = 25
+        pb2.current_iter_step = 50
+
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+            start = time.time()
+            loop = 0
+            while time.time() - start < 2.5:
+                loop += 1
+                pb1.current_iter_step = min(len(pb1), 25 + loop)
+                pb1.draw()
+                pb2.current_iter_step = min(len(pb2), 50 + loop * 2)
+                pb2.draw()
+                sleep(0.05)
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb1.draw()
+                pb2.draw()
+
+        lines = extract_rendered_lines(buffer.getvalue())
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertIn('PB1', lines[-2])
+        self.assertIn('PB2', lines[-1])
+
+        with redirect_stdout(StringIO()):
+            pb2.close()
+            pb1.close()
+
+    def test_log_messages_render_above_progress_bars(self):
+        columns = 100
+        pb = log.pb(100).title("PB").manual()
+        pb.current_iter_step = 10
+
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+                log.info("hello world")
+
+        lines = extract_rendered_lines(buffer.getvalue())
+
+        info_indices = [idx for idx, line in enumerate(lines) if 'INFO' in line]
+        pb_indices = [idx for idx, line in enumerate(lines) if '| ' in line]
+
+        self.assertTrue(info_indices, "expected a logged INFO line in output")
+        self.assertTrue(pb_indices, "expected a progress bar line in output")
+        self.assertLess(info_indices[-1], pb_indices[-1])
+        self.assertIn('PB', lines[pb_indices[-1]])
+
+        with redirect_stdout(StringIO()):
+            pb.close()

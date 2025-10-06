@@ -4,33 +4,138 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import logging
+import sys
 import threading
 from enum import Enum
-from typing import Iterable, Optional, Sequence, Union
+from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
 from .terminal import terminal_size
 from .columns import ColumnSpec, ColumnsPrinter
 
 # global static/shared logger instance
 logger = None
-last_pb_instance = None # one for logger, 2 for progressbar
 last_rendered_length = 0
 
 _STATE_LOCK = threading.RLock()
 _RENDER_LOCK = threading.RLock()
 
-def update_last_pb_instance(src) -> None:
-    """Record the most recent `ProgressBar` instance in a thread-safe way."""
-
-    global last_pb_instance
-    with _STATE_LOCK:
-        last_pb_instance = src
-
-
 def render_lock() -> threading.RLock:
     """Provide access to the shared render lock used for stdout writes."""
 
     return _RENDER_LOCK
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
+    from .progress import ProgressBar
+
+_attached_progress_bars = []  # type: list["ProgressBar"]
+_last_drawn_progress_count = 0
+
+
+def attach_progress_bar(pb: "ProgressBar") -> None:
+    """Register a progress bar so it participates in stacked rendering."""
+
+    with _STATE_LOCK:
+        if pb not in _attached_progress_bars:
+            _attached_progress_bars.append(pb)
+
+
+def detach_progress_bar(pb: "ProgressBar") -> None:
+    """Stop managing a progress bar."""
+
+    with _STATE_LOCK:
+        if pb in _attached_progress_bars:
+            _attached_progress_bars.remove(pb)
+
+
+def _clear_progress_stack_locked() -> None:
+    global _last_drawn_progress_count
+
+    if _last_drawn_progress_count == 0:
+        return
+
+    lines_to_move = max(_last_drawn_progress_count - 1, 0)
+
+    print('\r', end='')
+    if lines_to_move:
+        print(f'\033[{lines_to_move}A', end='')
+    print('\033[J', end='')
+    _last_drawn_progress_count = 0
+
+
+def clear_progress_stack(lock_held: bool = False) -> None:
+    """Erase any rendered progress bars from the terminal."""
+
+    if lock_held:
+        _clear_progress_stack_locked()
+    else:
+        with _RENDER_LOCK:
+            _clear_progress_stack_locked()
+
+
+def _active_progress_bars() -> list["ProgressBar"]:
+    with _STATE_LOCK:
+        return list(_attached_progress_bars)
+
+
+def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
+    global _last_drawn_progress_count
+
+    if columns_hint is not None:
+        columns = columns_hint
+    else:
+        columns, _ = terminal_size()
+
+    bars = _active_progress_bars()
+    to_remove = []
+    lines = []
+
+    for pb in bars:
+        if getattr(pb, "closed", False):
+            to_remove.append(pb)
+            continue
+
+        rendered = None
+        if precomputed is not None:
+            rendered = precomputed.get(pb)
+
+        if rendered is None:
+            try:
+                rendered = pb._render_snapshot(columns)
+            except Exception:  # pragma: no cover - avoid breaking logging on render issues
+                rendered = pb._last_rendered_line or ""
+        else:
+            pb._last_rendered_line = rendered
+
+        lines.append(rendered or "")
+
+    if to_remove:
+        with _STATE_LOCK:
+            for pb in to_remove:
+                if pb in _attached_progress_bars:
+                    _attached_progress_bars.remove(pb)
+
+    _clear_progress_stack_locked()
+
+    if not lines:
+        sys.stdout.flush()
+        return
+
+    for idx, line in enumerate(lines):
+        end = '\n' if idx < len(lines) - 1 else ''
+        print(f'\r{line}', end=end)
+
+    sys.stdout.flush()
+    _last_drawn_progress_count = len(lines)
+
+
+def render_progress_stack(lock_held: bool = False, precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
+    """Redraw all attached progress bars respecting their attach order."""
+
+    if lock_held:
+        _render_progress_stack_locked(precomputed=precomputed, columns_hint=columns_hint)
+    else:
+        with _RENDER_LOCK:
+            _render_progress_stack_locked(precomputed=precomputed, columns_hint=columns_hint)
 
 # ANSI color codes
 COLORS = {
@@ -95,7 +200,7 @@ class LogBar(logging.Logger):
     def pb(self, iterable: Iterable):
         from logbar.progress import ProgressBar
 
-        return ProgressBar(iterable)
+        return ProgressBar(iterable, owner=self).attach(self)
 
     def history_add(self, msg) -> bool:
         h = hash(msg) # TODO only msg is checked not level + msg
@@ -264,10 +369,7 @@ class LogBar(logging.Logger):
         return " ".join(part for part in parts if part)
 
     def _process(self, level: LEVEL, msg, *args, **kwargs):
-        from logbar.progress import ProgressBar
-
         global last_rendered_length
-        global last_pb_instance
 
         str_msg = self._format_message(msg, args)
 
@@ -276,8 +378,6 @@ class LogBar(logging.Logger):
 
             with _STATE_LOCK:
                 previous_render_length = last_rendered_length
-                active_progress = last_pb_instance
-                shared_logger = logger
 
             line_length = len(level.value) + (LEVEL_MAX_LENGTH - len(level.value)) + 1 + len(str_msg)
 
@@ -290,8 +390,7 @@ class LogBar(logging.Logger):
                 excess_padding = max(0, previous_render_length - printable_length)
                 rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
 
-            if isinstance(active_progress, ProgressBar) and not active_progress.closed:
-                print('\r', end='', flush=True)
+            _clear_progress_stack_locked()
 
             reset = COLORS["RESET"]
             color = COLORS.get(level.value, reset)
@@ -302,15 +401,4 @@ class LogBar(logging.Logger):
             with _STATE_LOCK:
                 last_rendered_length = printable_length
 
-            progress_to_draw = None
-
-            if isinstance(active_progress, ProgressBar):
-                if active_progress.closed:
-                    with _STATE_LOCK:
-                        if last_pb_instance is active_progress:
-                            last_pb_instance = None
-                elif self == shared_logger:
-                    progress_to_draw = active_progress
-
-            if progress_to_draw is not None:
-                progress_to_draw.draw()
+            _render_progress_stack_locked()
