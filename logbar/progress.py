@@ -4,10 +4,12 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import datetime
+import re
 import sys
 import time
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Iterable, Optional, Union, TYPE_CHECKING
+from typing import Iterable, Optional, Union, TYPE_CHECKING, Sequence
 from warnings import warn
 
 from . import LogBar
@@ -26,11 +28,266 @@ from .util import auto_iterable
 
 logger = LogBar.shared()
 
-# ANSI helpers for the animated title effect
+# ANSI helpers for the animated title effect + colour styling
 ANSI_RESET = "\033[0m"
 ANSI_BOLD_RESET = "\033[22m"
 TITLE_BASE_COLOR = "\033[38;5;250m"
 TITLE_HIGHLIGHT_COLOR = "\033[1m\033[38;5;15m"
+
+
+def _fg_256(code: int) -> str:
+    return f"\033[38;5;{code}m"
+
+
+def _fg_rgb(red: int, green: int, blue: int) -> str:
+    return f"\033[38;2;{red};{green};{blue}m"
+
+
+def _clamp_rgb(value: int) -> int:
+    return max(0, min(255, value))
+
+
+def _resolve_color(color: Optional[str]) -> str:
+    if not color:
+        return ""
+
+    if color.startswith("\033["):
+        return color
+
+    named = _STYLE_COLOR_NAMES.get(color.lower()) if isinstance(color, str) else None
+    if named:
+        return named
+
+    if isinstance(color, str) and color.isdigit():
+        return _fg_256(int(color))
+
+    if isinstance(color, str):
+        hex_match = re.fullmatch(r"#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", color)
+        if hex_match:
+            hex_value = hex_match.group(1)
+            if len(hex_value) == 3:
+                r, g, b = (int(ch * 2, 16) for ch in hex_value)
+            else:
+                r = int(hex_value[0:2], 16)
+                g = int(hex_value[2:4], 16)
+                b = int(hex_value[4:6], 16)
+            return _fg_rgb(_clamp_rgb(r), _clamp_rgb(g), _clamp_rgb(b))
+
+    return str(color)
+
+
+@dataclass(frozen=True)
+class ProgressStyle:
+    name: str
+    fill_char: str = "█"
+    empty_char: str = "-"
+    fill_colors: Sequence[str] = ()
+    empty_color: str = ""
+    gradient: bool = False
+    head_char: Optional[str] = None
+    head_color: Optional[str] = None
+
+    def with_fill_char(self, char: str) -> "ProgressStyle":
+        return replace(self, fill_char=char)
+
+    def with_empty_char(self, char: str) -> "ProgressStyle":
+        return replace(self, empty_char=char)
+
+    def with_colors(
+        self,
+        fill: Optional[Sequence[str]] = None,
+        empty: Optional[str] = None,
+        gradient: Optional[bool] = None,
+        head_color: Optional[str] = None,
+    ) -> "ProgressStyle":
+        style = self
+        if fill is not None:
+            style = replace(style, fill_colors=tuple(fill))
+        if empty is not None:
+            style = replace(style, empty_color=empty)
+        if gradient is not None:
+            style = replace(style, gradient=gradient)
+        if head_color is not None:
+            style = replace(style, head_color=head_color)
+        return style
+
+    def with_head_char(self, char: Optional[str]) -> "ProgressStyle":
+        return replace(self, head_char=char)
+
+    def render(self, filled: int, empty: int) -> tuple[str, str]:
+        # Build the plain-text representation (no ANSI) first.
+        if self.head_char and filled > 0:
+            plain_fill = self.fill_char * max(filled - 1, 0) + self.head_char
+        else:
+            plain_fill = self.fill_char * filled
+        plain_empty = self.empty_char * empty
+        plain_bar = plain_fill + plain_empty
+
+        rendered_segments: list[str] = []
+
+        def select_color(idx: int, total: int) -> str:
+            if not self.fill_colors:
+                return ""
+            palette = self.fill_colors
+            if self.gradient and len(palette) > 1 and total > 1:
+                pos = idx / (total - 1)
+                palette_index = min(int(pos * (len(palette) - 1)), len(palette) - 1)
+                return palette[palette_index]
+            return palette[idx % len(palette)]
+
+        current_color: Optional[str] = None
+        for idx in range(filled):
+            desired_color = select_color(idx, filled)
+            if self.head_color and idx == filled - 1:
+                desired_color = self.head_color
+
+            if desired_color != current_color:
+                if current_color:
+                    rendered_segments.append(ANSI_RESET)
+                if desired_color:
+                    rendered_segments.append(desired_color)
+                current_color = desired_color
+
+            rendered_segments.append(plain_fill[idx])
+
+        if current_color:
+            rendered_segments.append(ANSI_RESET)
+            current_color = None
+
+        if empty and self.empty_color:
+            rendered_segments.append(self.empty_color)
+            rendered_segments.append(plain_empty)
+            rendered_segments.append(ANSI_RESET)
+        else:
+            rendered_segments.append(plain_empty)
+
+        rendered_bar = ''.join(rendered_segments)
+
+        return plain_bar, rendered_bar
+
+
+def _register_default_styles() -> dict[str, ProgressStyle]:
+    styles = {}
+
+    def add(style: ProgressStyle):
+        styles[style.name] = style
+
+    add(
+        ProgressStyle(
+            name="emerald_glow",
+            fill_char="█",
+            empty_char="░",
+            fill_colors=(
+                _STYLE_COLOR_NAMES["emerald"],
+                _STYLE_COLOR_NAMES["spring"],
+            ),
+            empty_color=_STYLE_COLOR_NAMES["slate"],
+            gradient=True,
+            head_char="█",
+            head_color=_STYLE_COLOR_NAMES["mint"],
+        )
+    )
+
+    add(
+        ProgressStyle(
+            name="sunset",
+            fill_char="▉",
+            empty_char="·",
+            fill_colors=(
+                _STYLE_COLOR_NAMES["amber"],
+                _STYLE_COLOR_NAMES["peach"],
+                _STYLE_COLOR_NAMES["rose"],
+            ),
+            empty_color=_STYLE_COLOR_NAMES["evening"],
+            gradient=True,
+            head_char="▉",
+            head_color=_STYLE_COLOR_NAMES["carnation"],
+        )
+    )
+
+    add(
+        ProgressStyle(
+            name="ocean",
+            fill_char="▓",
+            empty_char="░",
+            fill_colors=(
+                _STYLE_COLOR_NAMES["deep_sea"],
+                _STYLE_COLOR_NAMES["aqua"],
+                _STYLE_COLOR_NAMES["foam"],
+            ),
+            empty_color=_STYLE_COLOR_NAMES["slate"],
+            gradient=True,
+            head_char="▓",
+            head_color=_STYLE_COLOR_NAMES["foam"],
+        )
+    )
+
+    add(
+        ProgressStyle(
+            name="mono",
+            fill_char="█",
+            empty_char="-",
+        )
+    )
+
+    add(
+        ProgressStyle(
+            name="matrix",
+            fill_char="▮",
+            empty_char="·",
+            fill_colors=(
+                _STYLE_COLOR_NAMES["emerald"],
+                _STYLE_COLOR_NAMES["matrix"],
+            ),
+            empty_color=_STYLE_COLOR_NAMES["charcoal"],
+            gradient=False,
+            head_char="▮",
+            head_color=_STYLE_COLOR_NAMES["lime"],
+        )
+    )
+
+    return styles
+
+
+_STYLE_COLOR_NAMES = {
+    "emerald": _fg_256(82),
+    "spring": _fg_256(121),
+    "mint": _fg_256(120),
+    "slate": _fg_256(240),
+    "amber": _fg_256(214),
+    "peach": _fg_256(217),
+    "rose": _fg_256(211),
+    "carnation": _fg_256(205),
+    "evening": _fg_256(236),
+    "deep_sea": _fg_256(24),
+    "aqua": _fg_256(45),
+    "foam": _fg_256(122),
+    "matrix": _fg_256(34),
+    "charcoal": _fg_256(237),
+    "lime": _fg_256(118),
+}
+
+_PROGRESS_STYLES = _register_default_styles()
+_DEFAULT_STYLE_NAME = "emerald_glow"
+
+
+def progress_style_names() -> list[str]:
+    return sorted(_PROGRESS_STYLES)
+
+
+def get_progress_style(style: Union[str, ProgressStyle]) -> ProgressStyle:
+    if isinstance(style, ProgressStyle):
+        return style
+
+    if style in _PROGRESS_STYLES:
+        return _PROGRESS_STYLES[style]
+
+    raise KeyError(f"Unknown progress style '{style}'. Available styles: {', '.join(progress_style_names())}")
+
+
+def register_progress_style(style: ProgressStyle) -> None:
+    _PROGRESS_STYLES[style.name] = style
+
 
 # TODO FIXME: what does this do exactly?
 class ProgressBarWarning(Warning):
@@ -46,6 +303,30 @@ class RenderMode(str, Enum):
 
 
 class ProgressBar:
+    @classmethod
+    def available_styles(cls) -> list[str]:
+        return progress_style_names()
+
+    @classmethod
+    def register_style(cls, style: ProgressStyle) -> None:
+        register_progress_style(style)
+
+    @classmethod
+    def set_default_style(cls, style: Union[str, ProgressStyle]) -> ProgressStyle:
+        if isinstance(style, ProgressStyle):
+            register_progress_style(style)
+            resolved = style
+        else:
+            resolved = get_progress_style(style)
+
+        global _DEFAULT_STYLE_NAME
+        _DEFAULT_STYLE_NAME = resolved.name
+        return resolved
+
+    @classmethod
+    def default_style(cls) -> ProgressStyle:
+        return get_progress_style(_DEFAULT_STYLE_NAME)
+
     def __init__(self, iterable: Union[Iterable, int, dict, set], owner: Optional["LogBarType"] = None):
         self._iterating = False # state: in init or active iteration
 
@@ -53,7 +334,8 @@ class ProgressBar:
 
         self._title = ""
         self._subtitle = ""
-        self._fill = '█'
+        self._style = self.default_style()
+        self._style_name = self._style.name
         self.closed = False # active state
 
         # max info length over the life ot the pb
@@ -89,8 +371,80 @@ class ProgressBar:
             self.ui_show_left_steps_offset = left_steps_offset
         return self
 
-    def fill(self, fill = '█'):
-        self._fill = fill
+    def style(self, style: Union[str, ProgressStyle]):
+        resolved = get_progress_style(style)
+        self._style = resolved
+        self._style_name = resolved.name
+        return self
+
+    def fill(self, fill: Union[str, ProgressStyle] = "█", empty: Optional[str] = None):
+        if isinstance(fill, ProgressStyle) or (isinstance(fill, str) and fill in _PROGRESS_STYLES):
+            return self.style(fill)
+
+        if not isinstance(fill, str) or not fill:
+            raise ValueError("fill must be a non-empty string or a named style")
+
+        previous_style = self._style
+        style = previous_style.with_fill_char(fill)
+
+        if empty is not None:
+            style = style.with_empty_char(empty)
+
+        if previous_style.head_char is None:
+            style = style.with_head_char(None)
+        elif previous_style.head_char == previous_style.fill_char:
+            style = style.with_head_char(fill)
+
+        self._style = style
+        self._style_name = style.name
+        return self
+
+    def colors(
+        self,
+        fill: Optional[Union[str, Sequence[str]]] = None,
+        empty: Optional[str] = None,
+        gradient: Optional[bool] = None,
+        head: Optional[str] = None,
+    ):
+        style = self._style
+
+        if fill is not None:
+            if isinstance(fill, (list, tuple)):
+                palette = tuple(_resolve_color(c) for c in fill if c)
+            else:
+                resolved = _resolve_color(fill)
+                palette = (resolved,) if resolved else ()
+
+            default_gradient = gradient if gradient is not None else (len(palette) > 1)
+            style = style.with_colors(fill=palette, gradient=default_gradient)
+        elif gradient is not None:
+            style = style.with_colors(gradient=gradient)
+
+        if empty is not None:
+            style = style.with_colors(empty=_resolve_color(empty))
+
+        if head is not None:
+            style = style.with_head_char(style.head_char or style.fill_char)
+            style = style.with_colors(head_color=_resolve_color(head))
+
+        self._style = style
+        self._style_name = style.name
+        return self
+
+    def head(self, char: Optional[str] = None, color: Optional[str] = None):
+        style = self._style
+
+        if char is not None:
+            if char:
+                style = style.with_head_char(char)
+            else:
+                style = style.with_head_char(None)
+
+        if color is not None:
+            style = style.with_colors(head_color=_resolve_color(color))
+
+        self._style = style
+        self._style_name = style.name
         return self
 
     def title(self, title:str):
@@ -226,10 +580,12 @@ class ProgressBar:
 
         bar_length = max(0, available_columns - pre_bar_size - len(log_text) - 2) if available_columns else 0
         filled_length = int(bar_length * self.step() // effective_total) if bar_length else 0
-        bar = self._fill * filled_length + '-' * (bar_length - filled_length)
+        empty_length = max(bar_length - filled_length, 0)
+        bar_plain, bar_rendered = self._style.render(filled_length, empty_length)
 
         rendered_line = self._render_line(
-            bar=bar,
+            bar_plain=bar_plain,
+            bar_rendered=bar_rendered,
             log_text=log_text,
             pre_bar_padding=padding,
             columns=columns,
@@ -238,7 +594,14 @@ class ProgressBar:
         self._last_rendered_line = rendered_line
         return rendered_line
 
-    def _render_line(self, bar: str, log_text: str, pre_bar_padding: str = "", columns: Optional[int] = None) -> str:
+    def _render_line(
+        self,
+        bar_plain: str,
+        log_text: str,
+        pre_bar_padding: str = "",
+        columns: Optional[int] = None,
+        bar_rendered: Optional[str] = None,
+    ) -> str:
         segments_plain = []
         segments_rendered = []
 
@@ -269,7 +632,9 @@ class ProgressBar:
             else:
                 append_segment(left_steps_text)
 
-        append_segment(f"{bar}| {log_text}")
+        plain_bar_segment = f"{bar_plain}| {log_text}"
+        rendered_bar_segment = f"{bar_rendered}| {log_text}" if bar_rendered is not None else None
+        append_segment(plain_bar_segment, rendered_bar_segment)
 
         plain_out = ''.join(segments_plain)
         rendered_out = ''.join(segments_rendered)
