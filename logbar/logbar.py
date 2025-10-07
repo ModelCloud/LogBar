@@ -30,6 +30,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
 
 _attached_progress_bars = []  # type: list["ProgressBar"]
 _last_drawn_progress_count = 0
+_cursor_positioned_above_stack = False
 _refresh_thread: Optional[threading.Thread] = None
 _REFRESH_INTERVAL_SECONDS = 0.1
 _last_active_draw = 0.0
@@ -55,18 +56,24 @@ def detach_progress_bar(pb: "ProgressBar") -> None:
 
 
 def _clear_progress_stack_locked() -> None:
-    global _last_drawn_progress_count
+    global _last_drawn_progress_count, _cursor_positioned_above_stack
 
-    if _last_drawn_progress_count == 0:
+    count = _last_drawn_progress_count
+    if count == 0:
+        _cursor_positioned_above_stack = False
         return
 
-    lines_to_move = max(_last_drawn_progress_count - 1, 0)
+    if _cursor_positioned_above_stack:
+        print('\033[1B', end='')
+    else:
+        print('\r', end='')
+        if count > 1:
+            print(f'\033[{count - 1}A', end='')
 
     print('\r', end='')
-    if lines_to_move:
-        print(f'\033[{lines_to_move}A', end='')
     print('\033[J', end='')
     _last_drawn_progress_count = 0
+    _cursor_positioned_above_stack = False
 
 
 def clear_progress_stack(lock_held: bool = False) -> None:
@@ -85,7 +92,7 @@ def _active_progress_bars() -> list["ProgressBar"]:
 
 
 def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
-    global _last_drawn_progress_count
+    global _last_drawn_progress_count, _cursor_positioned_above_stack
 
     if columns_hint is not None:
         columns = columns_hint
@@ -133,6 +140,13 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
 
     sys.stdout.flush()
     _last_drawn_progress_count = len(lines)
+    if _last_drawn_progress_count:
+        print('\r', end='')
+        print(f'\033[{_last_drawn_progress_count}A', end='')
+        _cursor_positioned_above_stack = True
+    else:
+        _cursor_positioned_above_stack = False
+    sys.stdout.flush()
     _record_progress_activity_locked()
 
 
