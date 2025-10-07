@@ -31,6 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
 _attached_progress_bars = []  # type: list["ProgressBar"]
 _last_drawn_progress_count = 0
 _cursor_positioned_above_stack = False
+_cursor_hidden = False
 _refresh_thread: Optional[threading.Thread] = None
 _REFRESH_INTERVAL_SECONDS = 0.1
 _last_active_draw = 0.0
@@ -55,12 +56,28 @@ def detach_progress_bar(pb: "ProgressBar") -> None:
         _record_progress_activity_locked()
 
 
-def _clear_progress_stack_locked() -> None:
+def _set_cursor_visibility_locked(visible: bool) -> None:
+    """Toggle the terminal cursor visibility, avoiding redundant writes."""
+
+    global _cursor_hidden
+
+    hidden = not visible
+    if _cursor_hidden == hidden:
+        return
+
+    code = '\033[?25h' if visible else '\033[?25l'
+    print(code, end='')
+    _cursor_hidden = hidden
+
+
+def _clear_progress_stack_locked(*, show_cursor: bool = True) -> None:
     global _last_drawn_progress_count, _cursor_positioned_above_stack
 
     count = _last_drawn_progress_count
     if count == 0:
         _cursor_positioned_above_stack = False
+        if show_cursor:
+            _set_cursor_visibility_locked(True)
         return
 
     if _cursor_positioned_above_stack:
@@ -74,6 +91,8 @@ def _clear_progress_stack_locked() -> None:
     print('\033[J', end='')
     _last_drawn_progress_count = 0
     _cursor_positioned_above_stack = False
+    if show_cursor:
+        _set_cursor_visibility_locked(True)
 
 
 def clear_progress_stack(lock_held: bool = False) -> None:
@@ -128,9 +147,10 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
                 if pb in _attached_progress_bars:
                     _attached_progress_bars.remove(pb)
 
-    _clear_progress_stack_locked()
+    _clear_progress_stack_locked(show_cursor=False)
 
     if not lines:
+        _set_cursor_visibility_locked(True)
         sys.stdout.flush()
         return
 
@@ -144,8 +164,10 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
         print('\r', end='')
         print(f'\033[{_last_drawn_progress_count}A', end='')
         _cursor_positioned_above_stack = True
+        _set_cursor_visibility_locked(False)
     else:
         _cursor_positioned_above_stack = False
+        _set_cursor_visibility_locked(True)
     sys.stdout.flush()
     _record_progress_activity_locked()
 
