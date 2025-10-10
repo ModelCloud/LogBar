@@ -26,6 +26,7 @@ _RENDER_LOCK = threading.RLock()
 _notebook_display_id: Optional[str] = None
 _notebook_display_handle = None
 _notebook_plain_last_line: Optional[str] = None
+_notebook_recreate_display = False
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
 
@@ -105,7 +106,7 @@ def _stdout_supports_cursor_movement() -> bool:
 def _notebook_render_stack(lines: Sequence[str]) -> bool:
     """Render the stack using IPython display machinery when available."""
 
-    global _notebook_display_handle, _notebook_display_id
+    global _notebook_display_handle, _notebook_display_id, _notebook_recreate_display
 
     if not _running_in_notebook_environment():
         return False
@@ -121,6 +122,15 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
 
     try:
         handle = _notebook_display_handle
+        if _notebook_recreate_display and handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
+            handle = None
+            _notebook_display_handle = None
+            _notebook_display_id = None
+
         if handle is None:
             result = display(payload, raw=True, display_id=True)
             if result is None:
@@ -155,9 +165,11 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
                 pass
             _notebook_display_handle = None
             _notebook_display_id = None
+        _notebook_recreate_display = False
     except Exception:
         _notebook_display_handle = None
         _notebook_display_id = None
+        _notebook_recreate_display = False
         return False
 
     return True
@@ -726,5 +738,9 @@ class LogBar(logging.Logger):
 
             with _STATE_LOCK:
                 last_rendered_length = printable_length
+
+            if not supports_cursor and _running_in_notebook_environment():
+                global _notebook_recreate_display
+                _notebook_recreate_display = True
 
             _render_progress_stack_locked()
