@@ -4,6 +4,7 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -19,6 +20,138 @@ last_rendered_length = 0
 
 _STATE_LOCK = threading.RLock()
 _RENDER_LOCK = threading.RLock()
+
+_notebook_display_handle = None
+_notebook_plain_last_line: Optional[str] = None
+
+
+def _running_in_notebook_environment() -> bool:
+    """Best-effort detection for Jupyter-style REMOTE frontends."""
+
+    if os.environ.get("LOGBAR_DISABLE_NOTEBOOK_DETECTION", "").strip():
+        return False
+
+    if os.environ.get("LOGBAR_FORCE_NOTEBOOK_MODE", "").strip():
+        return True
+
+    if os.environ.get("JPY_PARENT_PID") or os.environ.get("IPYKERNEL_PARENT_PID"):
+        return True
+
+    try:  # defer import to avoid hard dependency on IPython
+        from IPython import get_ipython
+    except Exception:  # pragma: no cover - IPython may not be installed
+        return False
+
+    try:
+        ip = get_ipython()  # type: ignore
+    except Exception:  # pragma: no cover - defensive for exotic shells
+        return False
+
+    if not ip:
+        return False
+
+    shell = getattr(ip, "__class__", None)
+    shell_name = getattr(shell, "__name__", "")
+    return shell_name == "ZMQInteractiveShell"
+
+
+def _stdout_supports_cursor_movement() -> bool:
+    stdout = sys.stdout
+    isatty = getattr(stdout, "isatty", None)
+
+    if callable(isatty):
+        try:
+            if isatty():
+                return True
+        except Exception:  # pragma: no cover - keep rendering alive on odd stdouts
+            return False
+
+    if os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "").strip():
+        return True
+
+    # When in a notebook frontend, cursor movement is not reliably supported.
+    if _running_in_notebook_environment():
+        return False
+
+    # Default to disabling cursor sequences when stdout is not a TTY.
+    return False
+
+
+def _notebook_render_stack(lines: Sequence[str]) -> bool:
+    """Render the stack using IPython display machinery when available."""
+
+    global _notebook_display_handle
+
+    if not _running_in_notebook_environment():
+        return False
+
+    try:
+        from IPython.display import display
+    except Exception:
+        return False
+
+    text = '\n'.join(lines) if lines else ''
+    payload = {'text/plain': text}
+
+    try:
+        handle = _notebook_display_handle
+        if handle is None:
+            handle = display(payload, raw=True, display_id=True)
+            if handle is None:
+                return False
+            _notebook_display_handle = handle
+        else:
+            handle.update(payload, raw=True)
+
+        if not lines:
+            try:
+                handle.update({'text/plain': ''}, raw=True)
+            except Exception:
+                pass
+            try:
+                handle.close()
+            except Exception:
+                pass
+            _notebook_display_handle = None
+    except Exception:
+        _notebook_display_handle = None
+        return False
+
+    return True
+
+
+def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
+    """Fallback notebook-friendly rendering using carriage returns only."""
+
+    global _notebook_plain_last_line
+
+    if not lines:
+        if _notebook_plain_last_line is not None:
+            sys.stdout.write('\r')
+            sys.stdout.write(' ' * len(_notebook_plain_last_line))
+            sys.stdout.write('\r')
+            sys.stdout.flush()
+        _notebook_plain_last_line = None
+        return
+
+    joined = '\n'.join(lines)
+
+    if len(lines) == 1:
+        previous = _notebook_plain_last_line or ''
+        pad = len(previous) - len(joined)
+        sys.stdout.write('\r')
+        sys.stdout.write(joined)
+        if pad > 0:
+            sys.stdout.write(' ' * pad)
+        sys.stdout.flush()
+        _notebook_plain_last_line = joined
+        return
+
+    # We cannot reposition multiple lines reliably without cursor controls. Emit the block once.
+    sys.stdout.write('\r')
+    sys.stdout.write(joined)
+    sys.stdout.flush()
+    _notebook_plain_last_line = lines[-1]
 
 def render_lock() -> threading.RLock:
     """Provide access to the shared render lock used for stdout writes."""
@@ -61,6 +194,10 @@ def _set_cursor_visibility_locked(visible: bool) -> None:
 
     global _cursor_hidden
 
+    if not _stdout_supports_cursor_movement():
+        _cursor_hidden = False
+        return
+
     hidden = not visible
     if _cursor_hidden == hidden:
         return
@@ -74,6 +211,17 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True) -> None:
     global _last_drawn_progress_count, _cursor_positioned_above_stack
 
     count = _last_drawn_progress_count
+    supports_cursor = _stdout_supports_cursor_movement()
+
+    if not supports_cursor:
+        if not _notebook_render_stack([]):
+            _notebook_render_plain_stdout([])
+        _last_drawn_progress_count = 0
+        _cursor_positioned_above_stack = False
+        if show_cursor:
+            _set_cursor_visibility_locked(True)
+        return
+
     if count == 0:
         _cursor_positioned_above_stack = False
         if show_cursor:
@@ -146,6 +294,19 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
             for pb in to_remove:
                 if pb in _attached_progress_bars:
                     _attached_progress_bars.remove(pb)
+
+    supports_cursor = _stdout_supports_cursor_movement()
+
+    if not supports_cursor:
+        handled = _notebook_render_stack(lines)
+        if not handled:
+            _notebook_render_plain_stdout(lines)
+            sys.stdout.flush()
+        _last_drawn_progress_count = 0
+        _cursor_positioned_above_stack = False
+        _set_cursor_visibility_locked(True)
+        _record_progress_activity_locked()
+        return
 
     _clear_progress_stack_locked(show_cursor=False)
 
