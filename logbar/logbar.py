@@ -5,9 +5,11 @@
 
 import logging
 import os
+import re
 import sys
 import threading
 import time
+import uuid
 from enum import Enum
 from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
@@ -21,8 +23,31 @@ last_rendered_length = 0
 _STATE_LOCK = threading.RLock()
 _RENDER_LOCK = threading.RLock()
 
+_notebook_display_id: Optional[str] = None
 _notebook_display_handle = None
 _notebook_plain_last_line: Optional[str] = None
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    if not text or "\x1b" not in text:
+        return text
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def _sanitize_notebook_lines(lines: Sequence[str]) -> list[str]:
+    if not lines:
+        return []
+    sanitized: list[str] = []
+    for line in lines:
+        clean = _strip_ansi(line)
+        if clean:
+            clean = clean.replace('\r', '').rstrip()
+        else:
+            clean = ""
+        sanitized.append(clean)
+    return sanitized
 
 
 def _running_in_notebook_environment() -> bool:
@@ -80,32 +105,48 @@ def _stdout_supports_cursor_movement() -> bool:
 def _notebook_render_stack(lines: Sequence[str]) -> bool:
     """Render the stack using IPython display machinery when available."""
 
-    global _notebook_display_handle
+    global _notebook_display_handle, _notebook_display_id
 
     if not _running_in_notebook_environment():
         return False
 
     try:
-        from IPython.display import display
+        from IPython.display import DisplayHandle, display
     except Exception:
         return False
 
-    text = '\n'.join(lines) if lines else ''
+    sanitized = _sanitize_notebook_lines(lines)
+    text = '\n'.join(sanitized) if sanitized else ''
     payload = {'text/plain': text}
 
     try:
         handle = _notebook_display_handle
         if handle is None:
-            handle = display(payload, raw=True, display_id=True)
-            if handle is None:
-                return False
+            result = display(payload, raw=True, display_id=True)
+            if result is None:
+                handle = DisplayHandle()
+                handle.display(payload, raw=True)
+            else:
+                handle = result
+            _notebook_display_id = getattr(handle, 'display_id', _notebook_display_id)
             _notebook_display_handle = handle
         else:
-            handle.update(payload, raw=True)
+            updated = False
+            update_method = getattr(handle, 'update', None)
+            if callable(update_method):
+                update_method(payload, raw=True)
+                updated = True
+            if not updated:
+                display_id = getattr(handle, 'display_id', _notebook_display_id) or True
+                display(payload, raw=True, display_id=display_id)
 
-        if not lines:
+        if not sanitized:
             try:
-                handle.update({'text/plain': ''}, raw=True)
+                update_method = getattr(handle, 'update', None)
+                if callable(update_method):
+                    update_method({'text/plain': ''}, raw=True)
+                else:
+                    display({'text/plain': ''}, raw=True, display_id=getattr(handle, 'display_id', _notebook_display_id) or True)
             except Exception:
                 pass
             try:
@@ -113,8 +154,10 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
             except Exception:
                 pass
             _notebook_display_handle = None
+            _notebook_display_id = None
     except Exception:
         _notebook_display_handle = None
+        _notebook_display_id = None
         return False
 
     return True
@@ -123,9 +166,14 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
 def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
     """Fallback notebook-friendly rendering using carriage returns only."""
 
-    global _notebook_plain_last_line
+    global _notebook_plain_last_line, _notebook_display_handle, _notebook_display_id
 
-    if not lines:
+    _notebook_display_handle = None
+    _notebook_display_id = None
+
+    sanitized = _sanitize_notebook_lines(lines)
+
+    if not sanitized:
         if _notebook_plain_last_line is not None:
             sys.stdout.write('\r')
             sys.stdout.write(' ' * len(_notebook_plain_last_line))
@@ -134,9 +182,9 @@ def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
         _notebook_plain_last_line = None
         return
 
-    joined = '\n'.join(lines)
+    joined = '\n'.join(sanitized)
 
-    if len(lines) == 1:
+    if len(sanitized) == 1:
         previous = _notebook_plain_last_line or ''
         pad = len(previous) - len(joined)
         sys.stdout.write('\r')
@@ -151,7 +199,7 @@ def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
     sys.stdout.write('\r')
     sys.stdout.write(joined)
     sys.stdout.flush()
-    _notebook_plain_last_line = lines[-1]
+    _notebook_plain_last_line = sanitized[-1]
 
 def render_lock() -> threading.RLock:
     """Provide access to the shared render lock used for stdout writes."""
@@ -651,6 +699,7 @@ class LogBar(logging.Logger):
 
         with _RENDER_LOCK:
             columns, _ = terminal_size()
+            supports_cursor = _stdout_supports_cursor_movement()
 
             with _STATE_LOCK:
                 previous_render_length = last_rendered_length
@@ -668,11 +717,12 @@ class LogBar(logging.Logger):
 
             _clear_progress_stack_locked()
 
-            reset = COLORS["RESET"]
-            color = COLORS.get(level.value, reset)
+            reset = COLORS["RESET"] if supports_cursor else ""
+            color = COLORS.get(level.value, "") if supports_cursor else ""
 
             level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
-            print(f"\r{color}{level.value}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
+            prefix = '\r' if supports_cursor else ''
+            print(f"{prefix}{color}{level.value}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
 
             with _STATE_LOCK:
                 last_rendered_length = printable_length
