@@ -199,6 +199,46 @@ class TestProgress(unittest.TestCase):
             pb2.close()
             pb1.close()
 
+    def test_notebook_stack_uses_display_updates(self):
+        pb = log.pb(5).title("NB").manual()
+        pb.current_iter_step = 3
+
+        from logbar import logbar as logbar_module
+
+        updates = []
+
+        class StubHandle:
+            def update(self, payload, raw=False):
+                updates.append(('update', payload['text/plain'], raw))
+                return self
+
+            def close(self):
+                updates.append(('close', '', None))
+
+        def stub_display(payload, raw=False, display_id=False):
+            updates.append(('display', payload['text/plain'], raw))
+            self.assertTrue(raw)
+            self.assertTrue(display_id)
+            return StubHandle()
+
+        logbar_module._notebook_display_handle = None
+
+        with patch('logbar.logbar._running_in_notebook_environment', return_value=True), \
+             patch('IPython.display.display', side_effect=stub_display):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+                pb.draw()
+
+        self.assertGreaterEqual(len(updates), 2)
+        initial = updates[0][1]
+        repeat = updates[-1][1]
+        self.assertIn('NB', initial)
+        self.assertEqual(initial, repeat)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
     def test_log_messages_render_above_progress_bars(self):
         columns = 100
         pb = log.pb(100).title("PB").manual()
