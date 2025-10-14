@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
+import builtins
 import logging
 import os
 import sys
@@ -13,6 +14,7 @@ from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
 from .terminal import terminal_size
 from .columns import ColumnSpec, ColumnsPrinter
+from .buffer import get_buffered_stdout
 
 # global static/shared logger instance
 logger = None
@@ -20,6 +22,28 @@ last_rendered_length = 0
 
 _STATE_LOCK = threading.RLock()
 _RENDER_LOCK = threading.RLock()
+
+def _stdout_stream():
+    return get_buffered_stdout(sys.stdout)
+
+
+def _write(data: str) -> int:
+    stream = _stdout_stream()
+    return stream.write(data)
+
+
+def _flush_stream() -> None:
+    stream = _stdout_stream()
+    flush = getattr(stream, "flush", None)
+    if callable(flush):
+        flush()
+
+
+def _print(*args, **kwargs) -> None:
+    if "file" not in kwargs:
+        kwargs["file"] = _stdout_stream()
+    kwargs.setdefault("flush", True)
+    builtins.print(*args, **kwargs)
 
 _notebook_display_handle = None
 _notebook_plain_last_line: Optional[str] = None
@@ -127,10 +151,10 @@ def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
 
     if not lines:
         if _notebook_plain_last_line is not None:
-            sys.stdout.write('\r')
-            sys.stdout.write(' ' * len(_notebook_plain_last_line))
-            sys.stdout.write('\r')
-            sys.stdout.flush()
+            _write('\r')
+            _write(' ' * len(_notebook_plain_last_line))
+            _write('\r')
+            _flush_stream()
         _notebook_plain_last_line = None
         return
 
@@ -139,18 +163,18 @@ def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
     if len(lines) == 1:
         previous = _notebook_plain_last_line or ''
         pad = len(previous) - len(joined)
-        sys.stdout.write('\r')
-        sys.stdout.write(joined)
+        _write('\r')
+        _write(joined)
         if pad > 0:
-            sys.stdout.write(' ' * pad)
-        sys.stdout.flush()
+            _write(' ' * pad)
+        _flush_stream()
         _notebook_plain_last_line = joined
         return
 
     # We cannot reposition multiple lines reliably without cursor controls. Emit the block once.
-    sys.stdout.write('\r')
-    sys.stdout.write(joined)
-    sys.stdout.flush()
+    _write('\r')
+    _write(joined)
+    _flush_stream()
     _notebook_plain_last_line = lines[-1]
 
 def render_lock() -> threading.RLock:
@@ -203,7 +227,7 @@ def _set_cursor_visibility_locked(visible: bool) -> None:
         return
 
     code = '\033[?25h' if visible else '\033[?25l'
-    print(code, end='')
+    _print(code, end='')
     _cursor_hidden = hidden
 
 
@@ -229,14 +253,14 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True) -> None:
         return
 
     if _cursor_positioned_above_stack:
-        print('\033[1B', end='')
+        _print('\033[1B', end='')
     else:
-        print('\r', end='')
+        _print('\r', end='')
         if count > 1:
-            print(f'\033[{count - 1}A', end='')
+            _print(f'\033[{count - 1}A', end='')
 
-    print('\r', end='')
-    print('\033[J', end='')
+    _print('\r', end='')
+    _print('\033[J', end='')
     _last_drawn_progress_count = 0
     _cursor_positioned_above_stack = False
     if show_cursor:
@@ -301,7 +325,7 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
         handled = _notebook_render_stack(lines)
         if not handled:
             _notebook_render_plain_stdout(lines)
-            sys.stdout.flush()
+            _flush_stream()
         _last_drawn_progress_count = 0
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
@@ -312,24 +336,24 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
 
     if not lines:
         _set_cursor_visibility_locked(True)
-        sys.stdout.flush()
+        _flush_stream()
         return
 
     for idx, line in enumerate(lines):
         end = '\n' if idx < len(lines) - 1 else ''
-        print(f'\r{line}', end=end)
+        _print(f'\r{line}', end=end)
 
-    sys.stdout.flush()
+    _flush_stream()
     _last_drawn_progress_count = len(lines)
     if _last_drawn_progress_count:
-        print('\r', end='')
-        print(f'\033[{_last_drawn_progress_count}A', end='')
+        _print('\r', end='')
+        _print(f'\033[{_last_drawn_progress_count}A', end='')
         _cursor_positioned_above_stack = True
         _set_cursor_visibility_locked(False)
     else:
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
-    sys.stdout.flush()
+        _flush_stream()
     _record_progress_activity_locked()
 
 
@@ -466,7 +490,7 @@ class LogBar(logging.Logger):
         if created_logger:
             with _RENDER_LOCK:
                 # clear space from previous logs
-                print("", end='\n', flush=True)
+                _print("", end='\n', flush=True)
 
         _ensure_background_refresh_thread()
 
@@ -672,7 +696,7 @@ class LogBar(logging.Logger):
             color = COLORS.get(level.value, reset)
 
             level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
-            print(f"\r{color}{level.value}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
+            _print(f"\r{color}{level.value}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
 
             with _STATE_LOCK:
                 last_rendered_length = printable_length
