@@ -1,4 +1,10 @@
+# SPDX-FileCopyrightText: 2024-2025 ModelCloud.ai
+# SPDX-FileCopyrightText: 2024-2025 qubitium@modelcloud.ai
+# SPDX-License-Identifier: Apache-2.0
+# Contact: qubitium@modelcloud.ai, x.com/qubitium
+
 import io
+import sys
 import threading
 from contextlib import redirect_stdout
 import unittest
@@ -6,6 +12,7 @@ from unittest import mock
 
 
 from logbar import LogBar
+from logbar.buffer import QueueingStdout, get_buffered_stdout
 
 log = LogBar.shared(override_logger=True)
 
@@ -107,3 +114,47 @@ class TestProgressBar(unittest.TestCase):
         self.assertEqual(len(message_lines), thread_count * iterations)
         for line in message_lines:
             self.assertIn("thread-", line)
+
+    def test_stdout_wrapped_when_unbuffered(self):
+        class CollectingStream:
+            def __init__(self):
+                self._writes = []
+                self._lock = threading.Lock()
+                self.callers = []
+
+            def write(self, data):
+                with self._lock:
+                    self._writes.append(data)
+                    self.callers.append(threading.current_thread().name)
+                return len(data)
+
+            def flush(self):
+                return None
+
+            def isatty(self):
+                return False
+
+            def getvalue(self):
+                with self._lock:
+                    return ''.join(self._writes)
+
+        original_stdout = sys.stdout
+        queue_stdout = None
+        collector = CollectingStream()
+
+        try:
+            sys.stdout = collector
+            log.info("buffered log")
+            queue_stdout = get_buffered_stdout(collector)
+
+            self.assertIsInstance(queue_stdout, QueueingStdout)
+            queue_stdout.flush()
+            self.assertIn("buffered log", collector.getvalue())
+            self.assertIn("logbar-stdout-flush", collector.callers)
+        finally:
+            if queue_stdout is not None and getattr(queue_stdout, "_logbar_queue_wrapped", False):
+                try:
+                    queue_stdout.close()
+                except Exception:
+                    pass
+            sys.stdout = original_stdout
