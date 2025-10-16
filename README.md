@@ -109,6 +109,19 @@ INFO  Processing [##########------------]  40%  (8/20) in-flight: step-8
 
 The bar always re-renders at the bottom, so log lines never overwrite your progress.
 
+### Indeterminate Progress
+
+When the total work is unknown, `log.spinner()` provides a rolling indicator that redraws every 500 ms until closed:
+
+```py
+with log.spinner("Loading model") as spinner:
+    load_weights()
+    spinner.subtitle("warming up")
+    warm_up()
+```
+
+The rolling bar animates automatically while attached. Close it explicitly with `spinner.close()` if you are not using the context manager.
+
 ### Multiple Progress Bars
 
 LogBar keeps each progress bar on its own line and restacks them whenever they redraw. Later bars always appear closest to the live log output.

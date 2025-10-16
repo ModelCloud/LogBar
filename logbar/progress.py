@@ -7,6 +7,7 @@ import datetime
 import re
 import sys
 import time
+import threading
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Iterable, Optional, Union, TYPE_CHECKING, Sequence
@@ -798,3 +799,179 @@ class ProgressBar:
 
         self.closed = True
         self.detach()
+
+
+class RollingProgressBar(ProgressBar):
+    """Indeterminate progress indicator with a rolling highlight."""
+
+    def __init__(self, owner: Optional["LogBarType"] = None, interval: float = 0.5, tail_length: int = 4):
+        super().__init__(iterable=1, owner=owner)
+        self._interval = max(0.05, float(interval))
+        self._tail_length = max(1, int(tail_length))
+        self._phase = 0
+        self.ui_show_left_steps = False
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def attach(self, logger: Optional["LogBarType"] = None):
+        super().attach(logger)
+        self._ensure_auto_updates()
+        return self
+
+    def detach(self):
+        self._stop_auto_updates()
+        return super().detach()
+
+    def close(self):
+        if self.closed:
+            return
+
+        self.closed = True
+        self._stop_auto_updates()
+        self.detach()
+
+    def pulse(self) -> "RollingProgressBar":
+        """Advance the animation a single frame and redraw immediately."""
+
+        self._advance_phase()
+        self.draw()
+        return self
+
+    def _ensure_auto_updates(self) -> None:
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            return
+
+        self._stop_event = threading.Event()
+        thread = threading.Thread(target=self._animate_loop, name="logbar-rolling-progress", daemon=True)
+        self._thread = thread
+        thread.start()
+
+    def _stop_auto_updates(self) -> None:
+        thread = self._thread
+        if thread is None:
+            return
+
+        self._stop_event.set()
+        thread.join(timeout=max(self._interval * 2, 0.1))
+        self._thread = None
+        self._stop_event = threading.Event()
+
+    def _animate_loop(self) -> None:
+        while not self._stop_event.is_set() and not self.closed:
+            time.sleep(self._interval)
+            if self.closed:
+                break
+            self._advance_phase()
+            try:
+                self.draw()
+            except Exception:
+                continue
+
+    def _advance_phase(self) -> None:
+        self._phase = (self._phase + 1) % 1_000_000
+
+    def _render_snapshot(self, columns: Optional[int] = None) -> str:
+        if columns is None:
+            columns, _ = terminal_size()
+
+        elapsed_seconds = max(0, int(time.time() - self.time))
+        elapsed = str(datetime.timedelta(seconds=elapsed_seconds))
+        log_text = f"elapsed {elapsed}".strip()
+
+        pre_bar_size = 0
+
+        if self._title:
+            pre_bar_size += self.max_title_len + 1
+        if self._subtitle:
+            pre_bar_size += self.max_subtitle_len + 1
+
+        padding = ""
+
+        if self._title and len(self._title) < self.max_title_len:
+            padding += " " * (self.max_title_len - len(self._title))
+
+        if self._subtitle and len(self._subtitle) < self.max_subtitle_len:
+            padding += " " * (self.max_subtitle_len - len(self._subtitle))
+
+        available_columns = columns if columns is not None and columns > 0 else 0
+
+        bar_length = max(0, available_columns - pre_bar_size - len(log_text) - 2) if available_columns else 0
+        self.bar_length = bar_length
+
+        bar_plain, bar_rendered = self._render_animation(bar_length)
+
+        self._last_rendered_line = self._render_line(
+            bar_plain=bar_plain,
+            bar_rendered=bar_rendered,
+            log_text=log_text,
+            pre_bar_padding=padding,
+            columns=columns,
+        )
+
+        return self._last_rendered_line
+
+    def _render_animation(self, bar_length: int) -> tuple[str, str]:
+        if bar_length <= 0:
+            return "", ""
+
+        fill_char = self._style.fill_char or "█"
+        empty_char = self._style.empty_char or " "
+        head_char = self._style.head_char or fill_char
+
+        tail = min(self._tail_length, bar_length)
+        if tail <= 0:
+            tail = 1
+
+        width = bar_length
+        phase_index = self._phase % width if width else 0
+
+        active: dict[int, int] = {}
+        for offset in range(tail):
+            idx = (phase_index - offset) % width
+            if idx not in active:
+                active[idx] = offset
+
+        plain_chars = [empty_char] * width
+        for idx, offset in active.items():
+            plain_chars[idx] = head_char if offset == 0 else fill_char
+
+        bar_plain = ''.join(plain_chars)
+
+        if not (self._style.fill_colors or self._style.head_color or self._style.empty_color):
+            return bar_plain, bar_plain
+
+        segments: list[str] = []
+        current_color: Optional[str] = None
+
+        for idx, char in enumerate(plain_chars):
+            color = ""
+            offset = active.get(idx)
+
+            if offset is not None:
+                if offset == 0 and self._style.head_color:
+                    color = self._style.head_color
+                else:
+                    palette = self._style.fill_colors
+                    if palette:
+                        if self._style.gradient and len(palette) > 1:
+                            palette_index = min(offset, len(palette) - 1)
+                        else:
+                            palette_index = idx % len(palette)
+                        color = palette[palette_index]
+            elif self._style.empty_color:
+                color = self._style.empty_color
+
+            if color != current_color:
+                if current_color:
+                    segments.append(ANSI_RESET)
+                if color:
+                    segments.append(color)
+                current_color = color
+
+            segments.append(char)
+
+        if current_color:
+            segments.append(ANSI_RESET)
+
+        return bar_plain, ''.join(segments)

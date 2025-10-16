@@ -502,6 +502,14 @@ class LogBar(logging.Logger):
 
         return ProgressBar(iterable, owner=self).attach(self)
 
+    def spinner(self, title: str = "", *, interval: float = 0.5, tail_length: int = 4):
+        from logbar.progress import RollingProgressBar
+
+        bar = RollingProgressBar(owner=self, interval=interval, tail_length=tail_length)
+        if title:
+            bar.title(title)
+        return bar.attach(self)
+
     def history_add(self, msg) -> bool:
         h = hash(msg) # TODO only msg is checked not level + msg
 
