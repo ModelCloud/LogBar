@@ -318,3 +318,42 @@ class TestProgress(unittest.TestCase):
         self.assertGreaterEqual(attachments, 1)
         self.assertGreaterEqual(detachments, 1)
         self.assertEqual(_active_progress_bars(), [])
+
+    def test_spinner_progress_auto_updates(self):
+        pb = log.spinner(title="Working", interval=0.1)
+        start = time.time()
+        last_line = ""
+        try:
+            while time.time() - start < 5.0:
+                sleep(0.1)
+                last_line = pb._last_rendered_line or last_line
+        finally:
+            pb.close()
+
+        phase = pb._phase
+        elapsed = time.time() - start
+        self.assertGreaterEqual(phase, 5)
+        self.assertGreaterEqual(elapsed, 5.0)
+        self.assertIn('elapsed', last_line)
+
+    def test_spinner_progress_pulse_advances_frame(self):
+        pb = log.spinner(title="Pulse", interval=10.0, tail_length=2)
+        initial_phase = pb._phase
+        start = time.time()
+        pulses = 0
+        last_line = ""
+        try:
+            while time.time() - start < 5.0:
+                pb.pulse()
+                pulses += 1
+                last_line = pb._last_rendered_line or last_line
+                sleep(0.5)
+        finally:
+            pb.close()
+
+        after_phase = pb._phase
+        pulse_duration = time.time() - start
+        self.assertGreater(after_phase, initial_phase)
+        self.assertGreaterEqual(after_phase - initial_phase, pulses)
+        self.assertGreaterEqual(pulse_duration, 5.0)
+        self.assertIn('Pulse', last_line)
