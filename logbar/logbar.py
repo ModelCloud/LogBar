@@ -332,28 +332,45 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
         _record_progress_activity_locked()
         return
 
-    _clear_progress_stack_locked(show_cursor=False)
+    previous_count = _last_drawn_progress_count
+    sequences: list[str] = []
+
+    if previous_count:
+        if _cursor_positioned_above_stack:
+            sequences.append('\033[1B')
+        else:
+            sequences.append('\r')
+            if previous_count > 1:
+                sequences.append(f'\033[{previous_count - 1}A')
+        sequences.append('\r')
+        sequences.append('\033[J')
+    else:
+        sequences.append('\r')
 
     if not lines:
-        _set_cursor_visibility_locked(True)
+        if sequences:
+            _write(''.join(sequences))
         _flush_stream()
+        _last_drawn_progress_count = 0
+        _cursor_positioned_above_stack = False
+        _set_cursor_visibility_locked(True)
+        _record_progress_activity_locked()
         return
 
     for idx, line in enumerate(lines):
-        end = '\n' if idx < len(lines) - 1 else ''
-        _print(f'\r{line}', end=end)
+        sequences.append('\r')
+        sequences.append(line)
+        if idx < len(lines) - 1:
+            sequences.append('\n')
 
+    sequences.append('\r')
+    sequences.append(f'\033[{len(lines)}A')
+
+    _write(''.join(sequences))
     _flush_stream()
     _last_drawn_progress_count = len(lines)
-    if _last_drawn_progress_count:
-        _print('\r', end='')
-        _print(f'\033[{_last_drawn_progress_count}A', end='')
-        _cursor_positioned_above_stack = True
-        _set_cursor_visibility_locked(False)
-    else:
-        _cursor_positioned_above_stack = False
-        _set_cursor_visibility_locked(True)
-        _flush_stream()
+    _cursor_positioned_above_stack = True
+    _set_cursor_visibility_locked(False)
     _record_progress_activity_locked()
 
 
