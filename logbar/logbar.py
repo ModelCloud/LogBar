@@ -231,7 +231,7 @@ def _set_cursor_visibility_locked(visible: bool) -> None:
     _cursor_hidden = hidden
 
 
-def _clear_progress_stack_locked(*, show_cursor: bool = True) -> None:
+def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bool = False) -> None:
     global _last_drawn_progress_count, _cursor_positioned_above_stack
 
     count = _last_drawn_progress_count
@@ -252,15 +252,29 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True) -> None:
             _set_cursor_visibility_locked(True)
         return
 
-    if _cursor_positioned_above_stack:
-        _print('\033[1B', end='')
-    else:
-        _print('\r', end='')
-        if count > 1:
-            _print(f'\033[{count - 1}A', end='')
+    sequences: list[str] = []
 
-    _print('\r', end='')
-    _print('\033[J', end='')
+    if _cursor_positioned_above_stack:
+        sequences.append('\033[1B')
+    else:
+        sequences.append('\r')
+        if count > 1:
+            sequences.append(f'\033[{count - 1}A')
+
+    sequences.append('\r')
+    sequences.append('\033[J')
+
+    if for_log_output and count > 0:
+        sequences.append('\033[1A')
+        sequences.append('\r')
+
+    if sequences:
+        buffer = ''.join(sequences)
+        if for_log_output and count > 0:
+            buffer += '\033[1S'
+        _write(buffer)
+        _flush_stream()
+
     _last_drawn_progress_count = 0
     _cursor_positioned_above_stack = False
     if show_cursor:
@@ -715,7 +729,7 @@ class LogBar(logging.Logger):
                 excess_padding = max(0, previous_render_length - printable_length)
                 rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
 
-            _clear_progress_stack_locked()
+            _clear_progress_stack_locked(for_log_output=True)
 
             reset = COLORS["RESET"]
             color = COLORS.get(level.value, reset)
