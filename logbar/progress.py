@@ -8,6 +8,7 @@ import re
 import sys
 import time
 import threading
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Iterable, Optional, Union, TYPE_CHECKING, Sequence
@@ -488,6 +489,76 @@ class ProgressBar:
         self._render_mode = RenderMode.MANUAL
         return self
 
+    def _render_lock_context(self):
+        lock_provider = render_lock if callable(render_lock) else None
+        if lock_provider is None:
+            return nullcontext(), False
+
+        try:
+            lock_obj = lock_provider()
+        except Exception:
+            return nullcontext(), False
+
+        if lock_obj is None:
+            return nullcontext(), False
+
+        if hasattr(lock_obj, "__enter__") and hasattr(lock_obj, "__exit__"):
+            return lock_obj, True
+
+        acquire = getattr(lock_obj, "acquire", None)
+        release = getattr(lock_obj, "release", None)
+
+        if callable(acquire) and callable(release):
+            @contextmanager
+            def _managed_lock():
+                acquire()
+                try:
+                    yield lock_obj
+                finally:
+                    release()
+
+            return _managed_lock(), True
+
+        return nullcontext(), False
+
+    def _fallback_detach_registry(self) -> None:
+        try:
+            from . import logbar as logbar_module
+        except Exception:
+            return
+
+        bars = getattr(logbar_module, "_attached_progress_bars", None)
+        if not isinstance(bars, list):
+            return
+
+        state_lock = getattr(logbar_module, "_STATE_LOCK", None)
+        lock_context = nullcontext()
+
+        if state_lock is not None:
+            if hasattr(state_lock, "__enter__") and hasattr(state_lock, "__exit__"):
+                lock_context = state_lock
+            else:
+                acquire = getattr(state_lock, "acquire", None)
+                release = getattr(state_lock, "release", None)
+
+                if callable(acquire) and callable(release):
+                    @contextmanager
+                    def _state_lock_ctx():
+                        acquire()
+                        try:
+                            yield
+                        finally:
+                            release()
+
+                    lock_context = _state_lock_ctx()
+
+        with lock_context:
+            if self in bars:
+                try:
+                    bars.remove(self)
+                except ValueError:
+                    pass
+
     def attach(self, logger: Optional["LogBarType"] = None):
         if self.closed:
             return self
@@ -500,8 +571,17 @@ class ProgressBar:
         self._owner_logger = target_logger
         attach_progress_bar(self)
         self._attached = True
-        with render_lock():
-            render_progress_stack(lock_held=True)
+
+        render_fn = render_progress_stack if callable(render_progress_stack) else None
+        context, lock_held = self._render_lock_context()
+
+        with context:
+            if render_fn is not None:
+                try:
+                    render_fn(lock_held=lock_held)
+                except Exception:
+                    if not sys.is_finalizing():
+                        raise
 
         return self
 
@@ -509,34 +589,69 @@ class ProgressBar:
         if not self._attached:
             return self
 
-        with render_lock():
-            detach_progress_bar(self)
-            render_progress_stack(lock_held=True)
+        detach_fn = detach_progress_bar if callable(detach_progress_bar) else None
+        render_fn = render_progress_stack if callable(render_progress_stack) else None
+        context, lock_held = self._render_lock_context()
+        exc_to_raise: Optional[BaseException] = None
+        detached_successfully = False
 
-        self._attached = False
-        self._attached_logger = None
-        self._last_rendered_line = ""
+        try:
+            with context:
+                if detach_fn is not None:
+                    try:
+                        detach_fn(self)
+                    except Exception as exc:
+                        if sys.is_finalizing():
+                            self._fallback_detach_registry()
+                        else:
+                            exc_to_raise = exc
+                else:
+                    self._fallback_detach_registry()
+
+                if render_fn is not None:
+                    try:
+                        render_fn(lock_held=lock_held)
+                    except Exception as exc:
+                        if not sys.is_finalizing() and exc_to_raise is None:
+                            exc_to_raise = exc
+            if exc_to_raise is not None:
+                raise exc_to_raise
+            detached_successfully = True
+        finally:
+            if detached_successfully:
+                self._attached = False
+                self._attached_logger = None
+                self._last_rendered_line = ""
+
         return self
 
     def draw(self):
         _record_progress_activity()
-        if not self._attached:
-            columns, _ = terminal_size()
-            rendered_line = self._render_snapshot(columns)
-
-            with render_lock():
-                print(f'\r{rendered_line}', end='', flush=True)
-            return
-
         columns, _ = terminal_size()
         rendered_line = self._render_snapshot(columns)
 
-        with render_lock():
-            render_progress_stack(
-                lock_held=True,
-                precomputed={self: rendered_line},
-                columns_hint=columns,
-            )
+        render_fn = render_progress_stack if callable(render_progress_stack) else None
+        context, lock_held = self._render_lock_context()
+
+        if not self._attached or render_fn is None:
+            with context:
+                try:
+                    print(f'\r{rendered_line}', end='', flush=True)
+                except Exception:
+                    if not sys.is_finalizing():
+                        raise
+            return
+
+        with context:
+            try:
+                render_fn(
+                    lock_held=lock_held,
+                    precomputed={self: rendered_line},
+                    columns_hint=columns,
+                )
+            except Exception:
+                if not sys.is_finalizing():
+                    raise
 
     def calc_time(self, iteration):
         used_time = int(time.time() - self.time)
