@@ -33,3 +33,6 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/ModelCloud/LogBar"
+
+[tool.setuptools.packages.find]
+include = ["logbar", "logbar.*"]
