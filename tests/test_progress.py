@@ -1,18 +1,7 @@
-# Copyright 2024-2025 ModelCloud.ai
-# Copyright 2024-2025 qubitium@modelcloud.ai
+# SPDX-FileCopyrightText: 2024-2025 ModelCloud.ai
+# SPDX-FileCopyrightText: 2024-2025 qubitium@modelcloud.ai
+# SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import random
 import re
@@ -199,11 +188,72 @@ class TestProgress(unittest.TestCase):
             pb2.close()
             pb1.close()
 
+    def test_detach_tolerates_missing_runtime_dependencies(self):
+        from logbar import progress as progress_module
+
+        pb = log.pb(range(5)).manual()
+        self.assertTrue(pb._attached)
+
+        original_detach = progress_module.detach_progress_bar
+
+        with patch.object(progress_module, "render_lock", new=None), \
+             patch.object(progress_module, "detach_progress_bar", new=None), \
+             patch.object(progress_module, "render_progress_stack", new=None):
+            with redirect_stdout(StringIO()):
+                pb.detach()
+
+        self.assertFalse(pb._attached)
+
+        with redirect_stdout(StringIO()):
+            original_detach(pb)
+
+        self.assertNotIn(pb, _active_progress_bars())
+
+        pb_nonfinal = log.pb(range(3)).manual()
+        self.assertTrue(pb_nonfinal._attached)
+
+        def boom_detach(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        with patch.object(progress_module, "detach_progress_bar", new=boom_detach):
+            with self.assertRaises(RuntimeError):
+                with redirect_stdout(StringIO()):
+                    pb_nonfinal.detach()
+
+        self.assertTrue(pb_nonfinal._attached)
+
+        with redirect_stdout(StringIO()):
+            pb_nonfinal.detach()
+
+        self.assertNotIn(pb_nonfinal, _active_progress_bars())
+
+        pb_final = log.pb(range(2)).manual()
+        self.assertTrue(pb_final._attached)
+
+        with patch.object(progress_module, "detach_progress_bar", new=boom_detach), \
+             patch.object(progress_module.sys, "is_finalizing", return_value=True):
+            with redirect_stdout(StringIO()):
+                pb_final.detach()
+
+        self.assertFalse(pb_final._attached)
+
+        with redirect_stdout(StringIO()):
+            original_detach(pb_final)
+
+        self.assertNotIn(pb_final, _active_progress_bars())
+
     def test_notebook_stack_uses_display_updates(self):
         pb = log.pb(5).title("NB").manual()
         pb.current_iter_step = 3
 
         from logbar import logbar as logbar_module
+
+        try:
+            import IPython.display as ip_display  # type: ignore
+        except ModuleNotFoundError:
+            with redirect_stdout(StringIO()):
+                pb.close()
+            self.skipTest("IPython not available")
 
         updates = []
 
@@ -224,7 +274,7 @@ class TestProgress(unittest.TestCase):
         logbar_module._notebook_display_handle = None
 
         with patch('logbar.logbar._running_in_notebook_environment', return_value=True), \
-             patch('IPython.display.display', side_effect=stub_display):
+             patch.object(ip_display, 'display', side_effect=stub_display):
             buffer = StringIO()
             with redirect_stdout(buffer):
                 pb.draw()

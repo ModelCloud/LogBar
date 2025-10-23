@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "LogBar"
-version = "0.1.6"
+version = "0.1.7"
 description = "A unified Logger and ProgressBar util with zero dependencies."
 readme = "README.md"
 requires-python = ">=3"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "ModelCloud", email = "qubitium@modelcloud.ai" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
 ]
 keywords = [
@@ -33,3 +33,6 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/ModelCloud/LogBar"
+
+[tool.setuptools.packages.find]
+include = ["logbar", "logbar.*"]
