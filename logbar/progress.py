@@ -30,6 +30,17 @@ from .util import auto_iterable
 
 logger = LogBar.shared()
 
+@contextmanager
+def _fallback_nullcontext():
+    yield
+
+
+def _safe_nullcontext(_nullcontext=nullcontext, _fallback=_fallback_nullcontext):
+    if callable(_nullcontext):
+        return _nullcontext()
+    return _fallback()
+
+
 # ANSI helpers for the animated title effect + colour styling
 ANSI_RESET = "\033[0m"
 ANSI_BOLD_RESET = "\033[22m"
@@ -492,15 +503,15 @@ class ProgressBar:
     def _render_lock_context(self):
         lock_provider = render_lock if callable(render_lock) else None
         if lock_provider is None:
-            return nullcontext(), False
+            return _safe_nullcontext(), False
 
         try:
             lock_obj = lock_provider()
         except Exception:
-            return nullcontext(), False
+            return _safe_nullcontext(), False
 
         if lock_obj is None:
-            return nullcontext(), False
+            return _safe_nullcontext(), False
 
         if hasattr(lock_obj, "__enter__") and hasattr(lock_obj, "__exit__"):
             return lock_obj, True
@@ -519,7 +530,7 @@ class ProgressBar:
 
             return _managed_lock(), True
 
-        return nullcontext(), False
+        return _safe_nullcontext(), False
 
     def _fallback_detach_registry(self) -> None:
         try:
@@ -532,7 +543,7 @@ class ProgressBar:
             return
 
         state_lock = getattr(logbar_module, "_STATE_LOCK", None)
-        lock_context = nullcontext()
+        lock_context = _safe_nullcontext()
 
         if state_lock is not None:
             if hasattr(state_lock, "__enter__") and hasattr(state_lock, "__exit__"):
