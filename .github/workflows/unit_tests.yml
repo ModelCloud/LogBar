@@ -20,7 +20,7 @@ jobs:
       test-files: ${{ steps.files.outputs.test-files }}
     steps:
       - name: Checkout Codes
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: List files
         id: files
@@ -55,7 +55,7 @@ jobs:
       matrix:
         test_script: ${{ fromJSON(needs.list-test-files.outputs.test-files) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: install requirements
         run: pip install parameterized pytest pytest-xdist
