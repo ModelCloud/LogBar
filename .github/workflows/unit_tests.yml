@@ -48,6 +48,7 @@ jobs:
     container:
       image: 10.0.13.31:5000/nvidia/cuda:130-ubuntu22.04_1021
       volumes:
+        - /monster/ci/pyenv:/opt/pyenv
         - /monster/ci/models:/monster/data/model
         - /monster/ci/huggingface:/github/home/.cache/huggingface
     strategy:
