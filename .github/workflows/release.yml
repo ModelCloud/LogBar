@@ -1,5 +1,8 @@
 name: Release
 
+defaults:
+  run:
+    shell: bash -le {0}
 on:
   release:
     types: [ published ]
