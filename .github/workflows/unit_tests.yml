@@ -60,7 +60,7 @@ jobs:
 
       - name: Print Env
         run: |
-          env_name="logbar_unit_test_py314_build"
+          env_name="logbar_unit_test_py314_${{ matrix.test_script }}"
 
           echo "env name: $env_name"
 
