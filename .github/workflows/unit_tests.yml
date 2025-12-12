@@ -46,10 +46,10 @@ jobs:
     needs:
       - list-test-files
     container:
-      image: 10.0.13.31:5000/modelcloud/gptqmodel:github-ci-v7
+      image: 10.0.13.31:5000/nvidia/cuda:130-ubuntu22.04_1021
       volumes:
-        - /home/ci/models:/monster/data/model
-        - /home/ci/models/huggingface:/github/home/.cache/huggingface
+        - /monster/ci/models:/monster/data/model
+        - /monster/ci/huggingface:/github/home/.cache/huggingface
     strategy:
       fail-fast: false
       matrix:
@@ -57,8 +57,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Print Env
+        run: |
+          env_name="logbar_unit_test_py314_build"
+
+          echo "env name: $env_name"
+
+          if [ -d "$(pyenv root)/versions/$env_name" ]; then
+            echo "env exists, skip"
+          else
+            echo "creating venv..."
+            pyenv virtualenv 3.14 "$env_name"
+          fi
+
+          pyenv local $env_name
+          pyenv activate $env_name
+
       - name: install requirements
-        run: pip install parameterized pytest pytest-xdist
+        run: pip install -U parameterized pytest pytest-xdist
 
       - name: install
         run: pip install .
