@@ -46,6 +46,32 @@ ANSI_RESET = "\033[0m"
 ANSI_BOLD_RESET = "\033[22m"
 TITLE_BASE_COLOR = "\033[38;5;250m"
 TITLE_HIGHLIGHT_COLOR = "\033[1m\033[38;5;15m"
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def _visible_length(text: str) -> int:
+    if not text:
+        return 0
+    cleaned = _strip_ansi(text)
+    cleaned = cleaned.replace("\r", "").replace("\n", "")
+    return len(cleaned)
+
+
+def _iter_ansi_tokens(text: str):
+    i = 0
+    while i < len(text):
+        if text[i] == "\x1b":
+            match = ANSI_ESCAPE_RE.match(text, i)
+            if match:
+                yield True, match.group(0)
+                i = match.end()
+                continue
+        yield False, text[i]
+        i += 1
 
 
 def _fg_256(code: int) -> str:
@@ -460,12 +486,13 @@ class ProgressBar:
         self._style_name = style.name
         return self
 
-    def title(self, title:str):
+    def title(self, title: str):
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Title should not be updated after iteration has started unless in `manual` render mode.")
 
-        if len(title) > self.max_title_len:
-            self.max_title_len = len(title)
+        title_len = _visible_length(title)
+        if title_len > self.max_title_len:
+            self.max_title_len = title_len
 
         previous_title = self._title
         self._title = title
@@ -482,8 +509,9 @@ class ProgressBar:
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Sub-title should not be updated after iteration has started unless in `manual` render mode.")
 
-        if len(subtitle) > self.max_subtitle_len:
-            self.max_subtitle_len = len(subtitle)
+        subtitle_len = _visible_length(subtitle)
+        if subtitle_len > self.max_subtitle_len:
+            self.max_subtitle_len = subtitle_len
 
         self._subtitle = subtitle
         return self
@@ -697,11 +725,15 @@ class ProgressBar:
 
         padding = ""
 
-        if self._title and len(self._title) < self.max_title_len:
-            padding += " " * (self.max_title_len - len(self._title))
+        if self._title:
+            title_len = _visible_length(self._title)
+            if title_len < self.max_title_len:
+                padding += " " * (self.max_title_len - title_len)
 
-        if self._subtitle and len(self._subtitle) < self.max_subtitle_len:
-            padding += " " * (self.max_subtitle_len - len(self._subtitle))
+        if self._subtitle:
+            subtitle_len = _visible_length(self._subtitle)
+            if subtitle_len < self.max_subtitle_len:
+                padding += " " * (self.max_subtitle_len - subtitle_len)
 
         available_columns = columns if columns is not None and columns > 0 else 0
 
@@ -732,8 +764,8 @@ class ProgressBar:
         segments_plain = []
         segments_rendered = []
 
-        def append_segment(text: str, rendered: Optional[str] = None):
-            segments_plain.append(text)
+        def append_segment(text: str, rendered: Optional[str] = None, plain: Optional[str] = None):
+            segments_plain.append(plain if plain is not None else text)
             segments_rendered.append(rendered if rendered is not None else text)
 
         animate_title = self._should_animate_title()
@@ -741,13 +773,14 @@ class ProgressBar:
         if self._title:
             if animate_title:
                 animated_title = self._animated_text(self._title)
-                append_segment(self._title, animated_title)
+                append_segment(self._title, animated_title, _strip_ansi(self._title))
             else:
-                append_segment(self._title)
+                append_segment(self._title, plain=_strip_ansi(self._title))
             append_segment(" ")
 
         if self._subtitle:
-            append_segment(self._subtitle + " ")
+            subtitle_text = f"{self._subtitle} "
+            append_segment(subtitle_text, plain=_strip_ansi(subtitle_text))
 
         if pre_bar_padding:
             append_segment(pre_bar_padding)
@@ -783,7 +816,9 @@ class ProgressBar:
 
         period = max(self._title_animation_period, 1e-6)
         elapsed = time.time() - self._title_animation_start
-        text_len = len(text)
+        text_len = _visible_length(text)
+        if text_len == 0:
+            return text
 
         # pause for a few beats once the highlight reaches the end to calm flicker
         pause_steps = 5
@@ -793,14 +828,19 @@ class ProgressBar:
         highlight_idx = cycle_step if cycle_step < text_len else None
 
         parts = [TITLE_BASE_COLOR]
-        for idx, char in enumerate(text):
-            if highlight_idx is not None and idx == highlight_idx:
+        visible_idx = 0
+        for is_ansi, token in _iter_ansi_tokens(text):
+            if is_ansi:
+                parts.append(token)
+                continue
+            if highlight_idx is not None and visible_idx == highlight_idx:
                 parts.append(TITLE_HIGHLIGHT_COLOR)
-                parts.append(char)
+                parts.append(token)
                 parts.append(ANSI_BOLD_RESET)
                 parts.append(TITLE_BASE_COLOR)
             else:
-                parts.append(char)
+                parts.append(token)
+            visible_idx += 1
 
         parts.append(ANSI_RESET)
         return ''.join(parts)
@@ -1014,11 +1054,15 @@ class RollingProgressBar(ProgressBar):
 
         padding = ""
 
-        if self._title and len(self._title) < self.max_title_len:
-            padding += " " * (self.max_title_len - len(self._title))
+        if self._title:
+            title_len = _visible_length(self._title)
+            if title_len < self.max_title_len:
+                padding += " " * (self.max_title_len - title_len)
 
-        if self._subtitle and len(self._subtitle) < self.max_subtitle_len:
-            padding += " " * (self.max_subtitle_len - len(self._subtitle))
+        if self._subtitle:
+            subtitle_len = _visible_length(self._subtitle)
+            if subtitle_len < self.max_subtitle_len:
+                padding += " " * (self.max_subtitle_len - subtitle_len)
 
         available_columns = columns if columns is not None and columns > 0 else 0
 

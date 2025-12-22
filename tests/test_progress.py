@@ -14,7 +14,7 @@ from time import sleep
 from unittest.mock import patch
 
 from logbar import LogBar
-from logbar.progress import ProgressBar
+from logbar.progress import ProgressBar, TITLE_HIGHLIGHT_COLOR, ANSI_BOLD_RESET
 from logbar.logbar import _active_progress_bars
 
 log = LogBar.shared(override_logger=True)
@@ -122,11 +122,45 @@ class TestProgress(unittest.TestCase):
             pb.subtitle(f"[SUBTITLE: FIXED]").draw()
             sleep(0.1)
 
+    def test_title_animation_skips_ansi_sequences(self):
+        pb = log.pb(1).manual()
+        ansi_title = "\033[31mRed\033[0mBlue"
+        pb.title(ansi_title)
+        pb._title_animation_period = 0.2
+        pb._title_animation_start = 100.0
+
+        with patch('logbar.progress.time.time', return_value=100.25):
+            animated = pb._animated_text(ansi_title)
+
+        match = re.search(re.escape(TITLE_HIGHLIGHT_COLOR) + r"(.)" + re.escape(ANSI_BOLD_RESET), animated)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "e")
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
     def test_draw_respects_terminal_width(self):
         pb = log.pb(100).title("TITLE").subtitle("SUBTITLE").manual()
         pb.current_iter_step = 50
 
         columns = 120
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        lines = extract_rendered_lines(buffer.getvalue())
+        self.assertTrue(lines, "expected at least one rendered line")
+        self.assertEqual(len(lines[-1]), columns)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
+    def test_draw_respects_terminal_width_with_ansi_title_subtitle(self):
+        pb = log.pb(100).title("\033[31mTITLE\033[0m").subtitle("\033[32mSUB\033[0m").manual()
+        pb.current_iter_step = 50
+
+        columns = 80
         with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
             buffer = StringIO()
             with redirect_stdout(buffer):
