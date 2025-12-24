@@ -173,6 +173,31 @@ class TestProgress(unittest.TestCase):
         with redirect_stdout(StringIO()):
             pb.close()
 
+    def test_time_estimate_accounts_for_last_item(self):
+        pb = ProgressBar(range(3))
+        pb.current_iter_step = 3
+        pb.time = 0
+
+        with patch('logbar.progress.time.time', return_value=10):
+            estimate = pb.calc_time(pb.step())
+
+        elapsed_str, total_str = [part.strip() for part in estimate.split("/", 1)]
+
+        def to_seconds(value: str) -> int:
+            parts = [int(part) for part in value.split(":")]
+            if len(parts) == 3:
+                hours, minutes, seconds = parts
+            elif len(parts) == 2:
+                hours = 0
+                minutes, seconds = parts
+            else:
+                hours = 0
+                minutes = 0
+                seconds = parts[0]
+            return hours * 3600 + minutes * 60 + seconds
+
+        self.assertGreater(to_seconds(total_str), to_seconds(elapsed_str))
+
     def test_draw_without_terminal_state(self):
         pb = log.pb(10).manual()
         pb.current_iter_step = 5
