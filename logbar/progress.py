@@ -695,7 +695,10 @@ class ProgressBar:
     def calc_time(self, iteration):
         used_time = int(time.time() - self.time)
         formatted_time = str(datetime.timedelta(seconds=used_time))
-        remaining = str(datetime.timedelta(seconds=int((used_time / max(iteration, 1)) * len(self))))
+        completed = iteration
+        if self._render_mode == RenderMode.AUTO and iteration > 0:
+            completed = iteration - 1
+        remaining = str(datetime.timedelta(seconds=int((used_time / max(completed, 1)) * len(self))))
         return f"{formatted_time} / {remaining}"
 
     def _render_snapshot(self, columns: Optional[int] = None) -> str:
