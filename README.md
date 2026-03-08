@@ -69,6 +69,14 @@ log.error("cannot connect to database")
 log.critical.once("fuse blown, shutting down")
 ```
 
+Set a minimum output threshold per logger instance:
+
+```py
+log.setLevel("WARN")           # accepts DEBUG/INFO/WARN/ERROR/CRIT strings
+log.setLevel("ERROR")
+log.setLevel(LogBar.WARNING)   # alias to logging.WARNING
+```
+
 Typical mixed-level output (Note: Markdown cannot display ANSI colors):
 
 ```

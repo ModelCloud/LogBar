@@ -4,6 +4,7 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import io
+import logging
 import sys
 import threading
 from contextlib import redirect_stdout
@@ -38,6 +39,50 @@ class TestProgressBar(unittest.TestCase):
         log.warn("hello warn")
         log.error("hello error")
         log.critical("hello critical")
+
+    def test_set_level_string_filters_custom_helpers(self):
+        local_log = LogBar("test_set_level_string_filters_custom_helpers")
+        local_log.setLevel("ERROR")
+
+        def emit():
+            local_log.debug("debug hidden token")
+            local_log.info("info hidden token")
+            local_log.error("error visible token")
+
+        output = self.capture_log(emit)
+        self.assertIn("error visible token", output)
+        self.assertNotIn("debug hidden token", output)
+        self.assertNotIn("info hidden token", output)
+
+    def test_set_level_filters_custom_helpers(self):
+        local_log = LogBar("test_set_level_filters_custom_helpers")
+        local_log.setLevel(logging.WARNING)
+
+        def emit():
+            local_log.info("info hidden by setLevel")
+            local_log.warn("warn visible by setLevel")
+
+        output = self.capture_log(emit)
+        self.assertIn("warn visible by setLevel", output)
+        self.assertNotIn("info hidden by setLevel", output)
+
+    def test_set_level_logbar_warning_alias_filters_custom_helpers(self):
+        local_log = LogBar("test_set_level_logbar_warning_alias_filters_custom_helpers")
+        self.assertEqual(LogBar.WARNING, logging.WARNING)
+        local_log.setLevel(LogBar.WARNING)
+
+        def emit():
+            local_log.info("info hidden by LogBar.WARNING")
+            local_log.warn("warn visible by LogBar.WARNING")
+
+        output = self.capture_log(emit)
+        self.assertIn("warn visible by LogBar.WARNING", output)
+        self.assertNotIn("info hidden by LogBar.WARNING", output)
+
+    def test_set_level_rejects_unknown_names(self):
+        local_log = LogBar("test_set_level_rejects_unknown_names")
+        with self.assertRaises(ValueError):
+            local_log.setLevel("TRACE")
 
     def test_log_without_terminal_state(self):
         """LogBar should operate even when the runtime lacks a terminal."""

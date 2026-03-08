@@ -110,6 +110,8 @@ def test_columns_simulate_updates_width_without_output():
 
 def test_columns_support_other_levels(capsys):
     cols = log.columns(cols=("name", "age"))
+    previous_level = log.level
+    log.setLevel("DEBUG")
 
     buffer = io.StringIO()
 
@@ -123,17 +125,20 @@ def test_columns_support_other_levels(capsys):
             sys.__stdout__.flush()
             buffer.flush()
 
-    with mock.patch('logbar.logbar.terminal_size', return_value=(0, 0)):
-        with capsys.disabled():
-            with redirect_stdout(Tee()):
-                cols.debug.header()
-                cols.debug("debug", "10")
-                cols.warn.header()
-                cols.warn("warn", "20")
-                cols.error.header()
-                cols.error("error", "30")
-                cols.critical.header()
-                cols.critical("critical", "40")
+    try:
+        with mock.patch('logbar.logbar.terminal_size', return_value=(0, 0)):
+            with capsys.disabled():
+                with redirect_stdout(Tee()):
+                    cols.debug.header()
+                    cols.debug("debug", "10")
+                    cols.warn.header()
+                    cols.warn("warn", "20")
+                    cols.error.header()
+                    cols.error("error", "30")
+                    cols.critical.header()
+                    cols.critical("critical", "40")
+    finally:
+        log.setLevel(previous_level)
 
     captured = _clean(buffer.getvalue())
     lines = [line for line in captured.splitlines() if line.strip()]

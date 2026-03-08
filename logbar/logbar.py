@@ -482,7 +482,44 @@ class LEVEL(str, Enum):
 
 LEVEL_MAX_LENGTH = 5 # ERROR/DEBUG is longest at 5 chars
 
+LEVEL_TO_LOGGING = {
+    LEVEL.DEBUG: logging.DEBUG,
+    LEVEL.INFO: logging.INFO,
+    LEVEL.WARN: logging.WARNING,
+    LEVEL.ERROR: logging.ERROR,
+    LEVEL.CRITICAL: logging.CRITICAL,
+}
+
+LEVEL_NAME_TO_LOGGING = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARN": logging.WARNING,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRIT": logging.CRITICAL,
+    "CRITICAL": logging.CRITICAL,
+    "FATAL": logging.CRITICAL,
+    "NOTSET": logging.NOTSET,
+}
+
+LOGGING_TO_LEVEL_LABEL = {
+    logging.DEBUG: LEVEL.DEBUG.value,
+    logging.INFO: LEVEL.INFO.value,
+    logging.WARNING: LEVEL.WARN.value,
+    logging.ERROR: LEVEL.ERROR.value,
+    logging.CRITICAL: LEVEL.CRITICAL.value,
+}
+
 class LogBar(logging.Logger):
+    NOTSET = logging.NOTSET
+    DEBUG = logging.DEBUG
+    INFO = logging.INFO
+    WARN = logging.WARNING
+    WARNING = logging.WARNING
+    ERROR = logging.ERROR
+    CRITICAL = logging.CRITICAL
+    FATAL = logging.CRITICAL
+
     history = set()
     history_limit = 1000
 
@@ -627,6 +664,57 @@ class LogBar(logging.Logger):
         self.history = set()
         self._history_lock = threading.Lock()
 
+    def _normalize_level(self, level: Union[LEVEL, int, str]) -> int:
+        if isinstance(level, LEVEL):
+            return LEVEL_TO_LOGGING[level]
+
+        if isinstance(level, int):
+            return level
+
+        if isinstance(level, str):
+            normalized = level.strip().upper()
+            if not normalized:
+                raise ValueError("Log level must not be empty.")
+
+            if normalized in LEVEL_NAME_TO_LOGGING:
+                return LEVEL_NAME_TO_LOGGING[normalized]
+
+            numeric = normalized
+            if normalized.startswith(("+", "-")):
+                numeric = normalized[1:]
+
+            if numeric.isdigit():
+                return int(normalized)
+
+            raise ValueError(f"Unknown log level: {level!r}")
+
+        raise TypeError(
+            "Log level must be a LEVEL enum, integer, or string name."
+        )
+
+    def _level_label(self, level: Union[LEVEL, int, str], normalized_level: int) -> str:
+        if isinstance(level, LEVEL):
+            return level.value
+
+        if isinstance(level, str):
+            normalized = level.strip().upper()
+            if normalized in ("WARNING", "WARN"):
+                return LEVEL.WARN.value
+            if normalized in ("CRITICAL", "FATAL", "CRIT"):
+                return LEVEL.CRITICAL.value
+            if normalized in ("DEBUG", "INFO", "ERROR"):
+                return normalized
+
+        return LOGGING_TO_LEVEL_LABEL.get(
+            normalized_level,
+            str(logging.getLevelName(normalized_level)),
+        )
+
+    def setLevel(self, level: Union[LEVEL, int, str]) -> None:
+        """Set the per-instance minimum output threshold for LogBar methods."""
+
+        super().setLevel(self._normalize_level(level))
+
     def columns(self, *headers, cols: Optional[Sequence] = None, width: Optional[Union[str, int, float]] = None, padding: int = 2):
         """Return a column-aware helper that keeps column widths aligned."""
 
@@ -707,9 +795,15 @@ class LogBar(logging.Logger):
 
         return " ".join(part for part in parts if part)
 
-    def _process(self, level: LEVEL, msg, *args, **kwargs):
+    def _process(self, level: Union[LEVEL, int, str], msg, *args, **kwargs):
         global last_rendered_length
 
+        normalized_level = self._normalize_level(level)
+        if not self.isEnabledFor(normalized_level):
+            return
+
+        level_label = self._level_label(level, normalized_level)
+        level_width = max(LEVEL_MAX_LENGTH, len(level_label))
         str_msg = self._format_message(msg, args)
 
         with _RENDER_LOCK:
@@ -718,10 +812,10 @@ class LogBar(logging.Logger):
             with _STATE_LOCK:
                 previous_render_length = last_rendered_length
 
-            line_length = len(level.value) + (LEVEL_MAX_LENGTH - len(level.value)) + 1 + len(str_msg)
+            line_length = level_width + 1 + len(str_msg)
 
             if columns > 0:
-                padding_needed = max(0, columns - LEVEL_MAX_LENGTH - 2 - len(str_msg))
+                padding_needed = max(0, columns - level_width - 2 - len(str_msg))
                 rendered_message = f"{str_msg}{' ' * padding_needed}"
                 printable_length = columns
             else:
@@ -732,10 +826,10 @@ class LogBar(logging.Logger):
             _clear_progress_stack_locked(for_log_output=True)
 
             reset = COLORS["RESET"]
-            color = COLORS.get(level.value, reset)
+            color = COLORS.get(level_label, reset)
 
-            level_padding = " " * (LEVEL_MAX_LENGTH - len(level.value)) # 5 is max enum string length
-            _print(f"\r{color}{level.value}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
+            level_padding = " " * (level_width - len(level_label))
+            _print(f"\r{color}{level_label}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
 
             with _STATE_LOCK:
                 last_rendered_length = printable_length
