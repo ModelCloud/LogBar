@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
+import subprocess
 import random
 import re
 import sys
@@ -138,6 +139,36 @@ class TestProgress(unittest.TestCase):
 
         with redirect_stdout(StringIO()):
             pb.close()
+
+    def test_title_animation_respects_logbar_animation_env(self):
+        script = (
+            "from types import SimpleNamespace\n"
+            "import sys\n"
+            "from logbar.progress import ProgressBar\n"
+            "pb = ProgressBar(range(1)).manual()\n"
+            "sys.stdout = SimpleNamespace(isatty=lambda: True, write=lambda *_: None, flush=lambda: None)\n"
+            "sys.__stdout__.write('1\\n' if pb._should_animate_title() else '0\\n')\n"
+        )
+
+        enabled = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd="/root/LogBar",
+            capture_output=True,
+            text=True,
+            env={},
+            check=True,
+        )
+        self.assertEqual(enabled.stdout.strip(), "1")
+
+        disabled = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd="/root/LogBar",
+            capture_output=True,
+            text=True,
+            env={"LOGBAR_ANIMATION": "0"},
+            check=True,
+        )
+        self.assertEqual(disabled.stdout.strip(), "0")
 
     def test_draw_respects_terminal_width(self):
         pb = log.pb(100).title("TITLE").subtitle("SUBTITLE").manual()

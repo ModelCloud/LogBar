@@ -23,6 +23,7 @@
 - Stackable progress bars that stay anchored while your logs flow freely.
 - Built-in styling for progress bar fills, colors, gradients, and head glyphs.
 - Animated progress titles with a subtle sweeping highlight.
+  Set `LOGBAR_ANIMATION=0` to disable the highlight animation.
 - Column-aware table printer with spans, width hints, and `fit` sizing.
 - Zero dependencies; works anywhere Python runs.
 
@@ -128,7 +129,7 @@ with log.spinner("Loading model") as spinner:
     warm_up()
 ```
 
-The rolling bar animates automatically while attached. Close it explicitly with `spinner.close()` if you are not using the context manager.
+The rolling bar animates automatically while attached. Close it explicitly with `spinner.close()` if you are not using the context manager. Set `LOGBAR_ANIMATION=0` to disable the title highlight sweep on progress labels.
 
 ### Multiple Progress Bars
 

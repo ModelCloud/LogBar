@@ -4,6 +4,7 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import datetime
+import os
 import re
 import sys
 import time
@@ -11,6 +12,7 @@ import threading
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from enum import Enum
+from functools import lru_cache
 from typing import Iterable, Optional, Union, TYPE_CHECKING, Sequence
 from warnings import warn
 
@@ -72,6 +74,12 @@ def _iter_ansi_tokens(text: str):
                 continue
         yield False, text[i]
         i += 1
+
+
+@lru_cache(maxsize=1)
+def _env_animation_enabled() -> bool:
+    value = os.environ.get("LOGBAR_ANIMATION", "1")
+    return str(value).strip().lower() not in {"0", "false", "off", "no"}
 
 
 def _fg_256(code: int) -> str:
@@ -878,6 +886,8 @@ class ProgressBar:
         return ''.join(result)
 
     def _should_animate_title(self) -> bool:
+        if not _env_animation_enabled():
+            return False
         isatty = getattr(sys.stdout, "isatty", None)
         if not callable(isatty):
             return False
