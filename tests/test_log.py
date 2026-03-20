@@ -266,11 +266,114 @@ class TestProgressBar(unittest.TestCase):
             raw = buffer.getvalue()
             lines = extract_rendered_lines(raw)
 
-            self.assertIn("\033[1L", raw)
             self.assertNotIn("\033[1S", raw)
             self.assertTrue(any("stacked message" in line for line in lines))
             for stack_line in stack_lines:
                 self.assertIn(stack_line, lines)
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)
+
+    def test_logging_above_active_progress_stack_forces_full_redraw(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        columns = 32
+        rows = [
+            StaticRenderable("top row"),
+            StaticRenderable("bottom row"),
+        ]
+        buffer = TTYBuffer()
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                checkpoint = len(buffer.getvalue())
+                log.info("message above stack")
+
+            delta = buffer.getvalue()[checkpoint:]
+            self.assertIn("\033[2K", delta)
+            self.assertNotIn("\033[1S", delta)
+            self.assertNotIn("\033[1L", delta)
+            self.assertIn(rows[0].line.ljust(columns), ANSI_ESCAPE_RE.sub('', delta))
+            self.assertIn(rows[1].line.ljust(columns), ANSI_ESCAPE_RE.sub('', delta))
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)
+
+    def test_fullscreen_progress_stack_defers_logs_until_clear(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        columns = 28
+        terminal_rows = 2
+        rows = [
+            StaticRenderable("top row"),
+            StaticRenderable("bottom row"),
+        ]
+        buffer = TTYBuffer()
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", return_value=(columns, terminal_rows)), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                checkpoint = len(buffer.getvalue())
+                log.info("fullscreen message")
+                active_delta = buffer.getvalue()[checkpoint:]
+
+                for row in rows:
+                    logbar_module.detach_progress_bar(row)
+                logbar_module.clear_progress_stack()
+
+            cleaned_active = ANSI_ESCAPE_RE.sub('', active_delta)
+            cleaned_full = ANSI_ESCAPE_RE.sub('', buffer.getvalue())
+
+            self.assertNotIn("\033[1S", active_delta)
+            self.assertNotIn("fullscreen message", cleaned_active)
+            self.assertIn("fullscreen message", cleaned_full)
         finally:
             with redirect_stdout(buffer):
                 logbar_module.clear_progress_stack()

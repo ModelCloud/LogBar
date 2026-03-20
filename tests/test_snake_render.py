@@ -218,6 +218,141 @@ class TTYBuffer(StringIO):
         return super().flush()
 
 
+class TerminalCellScreen:
+    def __init__(self, width: int, height: int):
+        self.width = width
+        self.height = height
+        self.rows = [[' '] * width for _ in range(height)]
+        self.row = 0
+        self.col = 0
+        self.wrap_pending = False
+
+    def snapshot(self):
+        return [''.join(row) for row in self.rows]
+
+    def _clamp_cursor(self):
+        self.row = max(0, min(self.height - 1, self.row))
+        self.col = max(0, min(self.width - 1, self.col))
+
+    def _advance_line(self):
+        if self.row >= self.height - 1:
+            self.rows.pop(0)
+            self.rows.append([' '] * self.width)
+            self.row = self.height - 1
+        else:
+            self.row += 1
+
+    def _write_char(self, char: str):
+        if self.width <= 0 or self.height <= 0:
+            return
+
+        if self.wrap_pending:
+            self._advance_line()
+            self.col = 0
+            self.wrap_pending = False
+
+        self.rows[self.row][self.col] = char
+        if self.col >= self.width - 1:
+            self.wrap_pending = True
+        else:
+            self.col += 1
+
+    def _erase_display(self, mode: int):
+        if mode == 2:
+            self.rows = [[' '] * self.width for _ in range(self.height)]
+            return
+
+        if mode != 0:
+            return
+
+        for idx in range(self.col, self.width):
+            self.rows[self.row][idx] = ' '
+        for row_idx in range(self.row + 1, self.height):
+            self.rows[row_idx] = [' '] * self.width
+
+    def _erase_line(self, mode: int):
+        if mode == 2:
+            self.rows[self.row] = [' '] * self.width
+            return
+        if mode == 0:
+            for idx in range(self.col, self.width):
+                self.rows[self.row][idx] = ' '
+            return
+        if mode == 1:
+            for idx in range(0, min(self.col + 1, self.width)):
+                self.rows[self.row][idx] = ' '
+
+    def _insert_lines(self, count: int):
+        for _ in range(max(0, count)):
+            self.rows.insert(self.row, [' '] * self.width)
+            self.rows.pop()
+
+    def _delete_lines(self, count: int):
+        for _ in range(max(0, count)):
+            self.rows.pop(self.row)
+            self.rows.append([' '] * self.width)
+
+    def _scroll_up(self, count: int):
+        for _ in range(max(0, count)):
+            self.rows.pop(0)
+            self.rows.append([' '] * self.width)
+
+    def _parse_count(self, params: str, default: int = 1) -> int:
+        head = params.lstrip('?').split(';', 1)[0]
+        return int(head) if head else default
+
+    def apply(self, buffer: str):
+        index = 0
+        while index < len(buffer):
+            char = buffer[index]
+            if char == '\x1b' and index + 1 < len(buffer) and buffer[index + 1] == '[':
+                end = index + 2
+                while end < len(buffer) and not ('@' <= buffer[end] <= '~'):
+                    end += 1
+
+                if end >= len(buffer):
+                    break
+
+                params = buffer[index + 2:end]
+                command = buffer[end]
+                self.wrap_pending = False
+
+                if command == 'A':
+                    self.row -= self._parse_count(params)
+                elif command == 'B':
+                    self.row += self._parse_count(params)
+                elif command == 'C':
+                    self.col += self._parse_count(params)
+                elif command == 'D':
+                    self.col -= self._parse_count(params)
+                elif command == 'G':
+                    self.col = self._parse_count(params, default=1) - 1
+                elif command == 'J':
+                    self._erase_display(self._parse_count(params, default=0))
+                elif command == 'K':
+                    self._erase_line(self._parse_count(params, default=0))
+                elif command == 'L':
+                    self._insert_lines(self._parse_count(params))
+                elif command == 'M':
+                    self._delete_lines(self._parse_count(params))
+                elif command == 'S':
+                    self._scroll_up(self._parse_count(params))
+
+                self._clamp_cursor()
+                index = end + 1
+                continue
+
+            if char == '\r':
+                self.col = 0
+                self.wrap_pending = False
+            elif char == '\n':
+                self._advance_line()
+                self.wrap_pending = False
+            else:
+                self._write_char(char)
+            index += 1
+
+
 class SnakeBoard:
     BORDER = "\033[38;5;240m"
     FOOD = "\033[38;5;196m"
@@ -324,8 +459,10 @@ class TestSnakeRender(unittest.TestCase):
         *,
         duration_seconds: float = 15.0,
         fps: int = 30,
+        log_every_frames: int = 90,
         use_detected_terminal_size: bool = False,
         terminal_size_provider=None,
+        output_observer=None,
     ):
         from logbar import logbar as logbar_module
 
@@ -336,11 +473,21 @@ class TestSnakeRender(unittest.TestCase):
         columns = board.render_width
         started = time.perf_counter()
         active_raw = ""
+        last_output_len = 0
         terminal_ctx = (
             patch.object(logbar_module, "terminal_size", side_effect=terminal_size_provider)
             if terminal_size_provider is not None
             else nullcontext()
         )
+
+        def observe(event: str, frame: int):
+            nonlocal last_output_len
+            if output_observer is None:
+                return
+            current = buffer.getvalue()
+            delta = current[last_output_len:]
+            last_output_len = len(current)
+            output_observer(delta=delta, event=event, frame=frame)
 
         with patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
              patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
@@ -354,6 +501,7 @@ class TestSnakeRender(unittest.TestCase):
                         logbar_module.render_progress_stack()
                     else:
                         logbar_module.render_progress_stack(columns_hint=columns)
+                    observe("initial", 0)
 
                     for frame in range(1, frame_count + 1):
                         board.advance()
@@ -361,9 +509,11 @@ class TestSnakeRender(unittest.TestCase):
                             logbar_module.render_progress_stack()
                         else:
                             logbar_module.render_progress_stack(columns_hint=columns)
+                        observe("frame", frame)
 
-                        if frame % 90 == 0:
+                        if log_every_frames > 0 and frame % log_every_frames == 0:
                             log.info(f"snake tick {frame}")
+                            observe("log", frame)
 
                         target = started + (frame * frame_interval)
                         remaining = target - time.perf_counter()
@@ -429,8 +579,7 @@ class TestSnakeRender(unittest.TestCase):
         self.assertEqual(detected_lines, fullscreen_lines)
         self.assertEqual(board.render_width, detected_columns)
         self.assertEqual(board.render_height, detected_lines)
-        self.assertTrue(any("snake tick 90" in line for line in lines))
-        self.assertTrue(any("snake tick 450" in line for line in lines))
+        self.assertNotIn("\033[1S", raw)
         self.assertEqual(len(final_frame), board.render_height)
         self.assertEqual(final_frame[-1], expected_frame[-1])
         self.assertTrue(
@@ -444,4 +593,36 @@ class TestSnakeRender(unittest.TestCase):
         self.assertTrue(any('o' in line for line in final_frame))
         self.assertTrue(all(visible_length(line) == detected_columns for line in final_frame))
         self.assertTrue(all(visible_length(line) == detected_columns for line in board.render_lines()))
+        self.assertGreaterEqual(elapsed, duration_seconds)
+
+    def test_fullscreen_snake_keeps_screen_cells_clean_after_every_draw(self):
+        columns = 22
+        lines = 8
+        duration_seconds = 2.0
+        fps = 15
+        board = SnakeBoard(width=columns - 2, height=lines - 2, initial_length=5)
+        screen = TerminalCellScreen(width=columns, height=lines)
+
+        def observe(delta: str, event: str, frame: int):
+            if not delta:
+                return
+            self.assertNotIn("\033[1S", delta)
+            screen.apply(delta)
+            expected = [strip_ansi(line) for line in board.render_lines()]
+            self.assertEqual(
+                screen.snapshot(),
+                expected,
+                msg=f"screen mismatch after {event} at frame {frame}",
+            )
+
+        elapsed, _raw = self._run_snake_session(
+            board,
+            duration_seconds=duration_seconds,
+            fps=fps,
+            log_every_frames=3,
+            use_detected_terminal_size=True,
+            terminal_size_provider=lambda: (columns, lines),
+            output_observer=observe,
+        )
+
         self.assertGreaterEqual(elapsed, duration_seconds)

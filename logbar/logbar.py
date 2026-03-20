@@ -213,10 +213,65 @@ _last_drawn_progress_count = 0
 _last_rendered_terminal_size: Optional[tuple[int, int]] = None
 _last_rendered_progress_lines: list[str] = []
 _cursor_positioned_above_stack = False
+_cursor_positioned_on_stack_top = False
+_stack_redraw_invalidated = False
+_deferred_log_records: list[tuple[int, str]] = []
 _cursor_hidden = False
 _refresh_thread: Optional[threading.Thread] = None
 _REFRESH_INTERVAL_SECONDS = 0.1
 _last_active_draw = 0.0
+
+
+def _set_stack_cursor_anchor(line_count: int, terminal_rows: int) -> None:
+    global _cursor_positioned_above_stack, _cursor_positioned_on_stack_top
+
+    if line_count <= 0:
+        _cursor_positioned_above_stack = False
+        _cursor_positioned_on_stack_top = False
+        return
+
+    if terminal_rows > 0 and line_count >= terminal_rows:
+        _cursor_positioned_above_stack = False
+        _cursor_positioned_on_stack_top = True
+        return
+
+    _cursor_positioned_above_stack = True
+    _cursor_positioned_on_stack_top = False
+
+
+def _should_defer_log_output_locked(terminal_rows: int) -> bool:
+    if _last_drawn_progress_count <= 0:
+        return False
+
+    if terminal_rows <= 0:
+        return False
+
+    return (
+        _last_drawn_progress_count >= terminal_rows
+        and not _cursor_positioned_above_stack
+    )
+
+
+def _flush_deferred_logs_locked() -> None:
+    global _deferred_log_records
+
+    if not _deferred_log_records or logger is None:
+        return
+
+    pending = list(_deferred_log_records)
+    _deferred_log_records = []
+
+    for normalized_level, str_msg in pending:
+        level_label = LOGGING_TO_LEVEL_LABEL.get(
+            normalized_level,
+            str(logging.getLevelName(normalized_level)),
+        )
+        logger._emit_log_line_locked(
+            normalized_level,
+            level_label,
+            str_msg,
+            allow_defer=False,
+        )
 
 
 def attach_progress_bar(pb: "ProgressBar") -> None:
@@ -271,7 +326,7 @@ def _clear_progress_stack_locked(
     for_log_output: bool = False,
     backend_state: Optional[RenderBackendState] = None,
 ) -> None:
-    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack, _cursor_positioned_on_stack_top, _stack_redraw_invalidated
 
     count = _last_drawn_progress_count
     state = backend_state or _current_render_backend_state()
@@ -284,22 +339,32 @@ def _clear_progress_stack_locked(
         _last_rendered_terminal_size = None
         _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
+        _cursor_positioned_on_stack_top = False
+        _stack_redraw_invalidated = False
         if show_cursor:
             _set_cursor_visibility_locked(True)
+        if not for_log_output:
+            _flush_deferred_logs_locked()
         return
 
     if count == 0:
         _last_rendered_terminal_size = None
         _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
+        _cursor_positioned_on_stack_top = False
+        _stack_redraw_invalidated = False
         if show_cursor:
             _set_cursor_visibility_locked(True)
+        if not for_log_output:
+            _flush_deferred_logs_locked()
         return
 
     sequences: list[str] = []
 
     if _cursor_positioned_above_stack:
         sequences.append('\033[1B')
+    elif _cursor_positioned_on_stack_top:
+        sequences.append('\r')
     else:
         sequences.append('\r')
         if count > 1:
@@ -323,12 +388,18 @@ def _clear_progress_stack_locked(
     _last_rendered_terminal_size = None
     _last_rendered_progress_lines = []
     _cursor_positioned_above_stack = False
+    _cursor_positioned_on_stack_top = False
+    _stack_redraw_invalidated = False
     if show_cursor:
         _set_cursor_visibility_locked(True)
+    if not for_log_output:
+        _flush_deferred_logs_locked()
 
 
 def _prepare_progress_stack_for_log_locked() -> bool:
-    """Reserve one row above the active stack for a log line without scrolling it."""
+    """Write a log line above the active stack and force a full redraw afterward."""
+
+    global _stack_redraw_invalidated
 
     count = _last_drawn_progress_count
     if count == 0:
@@ -340,11 +411,10 @@ def _prepare_progress_stack_for_log_locked() -> bool:
     if not _cursor_positioned_above_stack:
         return False
 
-    # Insert a blank row at the top of the current stack so the log line's
-    # trailing newline lands inside the stack footprint instead of pushing the
-    # whole render window down by a row.
-    _write('\033[1B\r\033[1L\033[1A\r')
-    _flush_stream()
+    # The newline for the log line will briefly land on the first stack row.
+    # Force the next stack paint to be a full redraw so any overwritten rows
+    # are restored even when the frame contents are otherwise unchanged.
+    _stack_redraw_invalidated = True
     return True
 
 
@@ -368,7 +438,7 @@ def _render_progress_stack_locked(
     columns_hint: Optional[int] = None,
     backend_state: Optional[RenderBackendState] = None,
 ) -> None:
-    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack, _cursor_positioned_on_stack_top, _stack_redraw_invalidated
 
     state = backend_state or _current_render_backend_state(columns_hint)
     columns = state.columns
@@ -439,6 +509,8 @@ def _render_progress_stack_locked(
         _last_rendered_terminal_size = None
         _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
+        _cursor_positioned_on_stack_top = False
+        _stack_redraw_invalidated = False
         _set_cursor_visibility_locked(True)
         _record_progress_activity_locked()
         return
@@ -454,9 +526,16 @@ def _render_progress_stack_locked(
 
     can_diff_redraw = (
         previous_count > 0
-        and _cursor_positioned_above_stack
+        and (_cursor_positioned_above_stack or _cursor_positioned_on_stack_top)
+        and not _stack_redraw_invalidated
         and not size_changed
         and len(previous_lines) == len(lines)
+    )
+    can_rewrite_full_footprint = (
+        previous_count > 0
+        and (_cursor_positioned_above_stack or _cursor_positioned_on_stack_top)
+        and len(previous_lines) == len(lines)
+        and (_stack_redraw_invalidated or size_changed)
     )
 
     if lines and can_diff_redraw:
@@ -466,14 +545,17 @@ def _render_progress_stack_locked(
         ]
 
         if changed_indexes:
+            base_offset = 1 if _cursor_positioned_above_stack else 0
             for index in changed_indexes:
-                offset = index + 1
-                sequences.append(f'\033[{offset}B')
+                offset = index + base_offset
+                if offset > 0:
+                    sequences.append(f'\033[{offset}B')
                 sequences.append('\r')
                 sequences.append('\033[2K')
                 sequences.append(lines[index])
                 sequences.append('\r')
-                sequences.append(f'\033[{offset}A')
+                if offset > 0:
+                    sequences.append(f'\033[{offset}A')
 
             _write(''.join(sequences))
             _flush_stream()
@@ -481,7 +563,35 @@ def _render_progress_stack_locked(
         _last_drawn_progress_count = len(lines)
         _last_rendered_terminal_size = (terminal_columns, terminal_rows)
         _last_rendered_progress_lines = list(lines)
-        _cursor_positioned_above_stack = True
+        _set_stack_cursor_anchor(len(lines), terminal_rows)
+        _stack_redraw_invalidated = False
+        _set_cursor_visibility_locked(False)
+        with _STATE_LOCK:
+            _dirty_progress_bars.difference_update(bars)
+        _record_progress_activity_locked()
+        return
+
+    if lines and can_rewrite_full_footprint:
+        base_offset = 1 if _cursor_positioned_above_stack else 0
+        for index, line in enumerate(lines):
+            offset = index + base_offset
+            if offset > 0:
+                sequences.append(f'\033[{offset}B')
+            sequences.append('\r')
+            sequences.append('\033[2K')
+            sequences.append(line)
+            sequences.append('\r')
+            if offset > 0:
+                sequences.append(f'\033[{offset}A')
+
+        _write(''.join(sequences))
+        _flush_stream()
+
+        _last_drawn_progress_count = len(lines)
+        _last_rendered_terminal_size = (terminal_columns, terminal_rows)
+        _last_rendered_progress_lines = list(lines)
+        _set_stack_cursor_anchor(len(lines), terminal_rows)
+        _stack_redraw_invalidated = False
         _set_cursor_visibility_locked(False)
         with _STATE_LOCK:
             _dirty_progress_bars.difference_update(bars)
@@ -491,6 +601,8 @@ def _render_progress_stack_locked(
     if previous_count:
         if _cursor_positioned_above_stack:
             sequences.append('\033[1B')
+        elif _cursor_positioned_on_stack_top:
+            sequences.append('\r')
         else:
             sequences.append('\r')
             if previous_count > 1:
@@ -508,6 +620,7 @@ def _render_progress_stack_locked(
         _last_rendered_terminal_size = (terminal_columns, terminal_rows)
         _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
+        _stack_redraw_invalidated = False
         _set_cursor_visibility_locked(True)
         with _STATE_LOCK:
             _dirty_progress_bars.difference_update(bars)
@@ -521,14 +634,19 @@ def _render_progress_stack_locked(
             sequences.append('\n')
 
     sequences.append('\r')
-    sequences.append(f'\033[{len(lines)}A')
+    move_up = len(lines)
+    if terminal_rows > 0 and len(lines) >= terminal_rows:
+        move_up = max(0, len(lines) - 1)
+    if move_up > 0:
+        sequences.append(f'\033[{move_up}A')
 
     _write(''.join(sequences))
     _flush_stream()
     _last_drawn_progress_count = len(lines)
     _last_rendered_terminal_size = (terminal_columns, terminal_rows)
     _last_rendered_progress_lines = list(lines)
-    _cursor_positioned_above_stack = True
+    _set_stack_cursor_anchor(len(lines), terminal_rows)
+    _stack_redraw_invalidated = False
     _set_cursor_visibility_locked(False)
     with _STATE_LOCK:
         _dirty_progress_bars.difference_update(bars)
@@ -975,51 +1093,73 @@ class LogBar(logging.Logger):
 
         return " ".join(part for part in parts if part)
 
-    def _process(self, level: Union[LEVEL, int, str], msg, *args, **kwargs):
-        global last_rendered_length, _cursor_positioned_above_stack
+    def _emit_log_line_locked(
+        self,
+        normalized_level: int,
+        level_label: str,
+        str_msg: str,
+        *,
+        allow_defer: bool = True,
+    ) -> None:
+        global last_rendered_length, _cursor_positioned_above_stack, _deferred_log_records
 
+        columns, terminal_rows = terminal_size()
+        level_width = max(LEVEL_MAX_LENGTH, len(level_label))
+
+        with _STATE_LOCK:
+            previous_render_length = last_rendered_length
+
+        message_width = visible_length(str_msg)
+        line_length = level_width + 1 + message_width
+
+        if columns > 0:
+            padding_needed = max(0, columns - level_width - 2 - message_width)
+            rendered_message = f"{str_msg}{' ' * padding_needed}"
+            printable_length = columns
+        else:
+            printable_length = line_length
+            excess_padding = max(0, previous_render_length - printable_length)
+            rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
+
+        if allow_defer and _should_defer_log_output_locked(terminal_rows):
+            _deferred_log_records.append((normalized_level, str_msg))
+            return
+
+        stacked_log_insert = _prepare_progress_stack_for_log_locked()
+        if not stacked_log_insert:
+            _clear_progress_stack_locked(for_log_output=True)
+
+        reset = COLORS["RESET"]
+        color = COLORS.get(level_label, reset)
+        level_padding = " " * (level_width - len(level_label))
+        _print(f"\r{color}{level_label}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
+
+        with _STATE_LOCK:
+            last_rendered_length = printable_length
+
+        if stacked_log_insert:
+            _write('\033[1A\r')
+            _flush_stream()
+            _cursor_positioned_above_stack = True
+
+        _render_progress_stack_locked()
+
+    def _process(self, level: Union[LEVEL, int, str], msg, *args, **kwargs):
         normalized_level = self._normalize_level(level)
         if not self.isEnabledFor(normalized_level):
             return
 
         level_label = self._level_label(level, normalized_level)
-        level_width = max(LEVEL_MAX_LENGTH, len(level_label))
         str_msg = self._format_message(msg, args)
 
         with _RENDER_LOCK:
-            columns, _ = terminal_size()
+            _, terminal_rows = terminal_size()
+            if _deferred_log_records and not _should_defer_log_output_locked(terminal_rows):
+                _flush_deferred_logs_locked()
 
-            with _STATE_LOCK:
-                previous_render_length = last_rendered_length
-
-            message_width = visible_length(str_msg)
-            line_length = level_width + 1 + message_width
-
-            if columns > 0:
-                padding_needed = max(0, columns - level_width - 2 - message_width)
-                rendered_message = f"{str_msg}{' ' * padding_needed}"
-                printable_length = columns
-            else:
-                printable_length = line_length
-                excess_padding = max(0, previous_render_length - printable_length)
-                rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
-
-            stacked_log_insert = _prepare_progress_stack_for_log_locked()
-            if not stacked_log_insert:
-                _clear_progress_stack_locked(for_log_output=True)
-
-            reset = COLORS["RESET"]
-            color = COLORS.get(level_label, reset)
-
-            level_padding = " " * (level_width - len(level_label))
-            _print(f"\r{color}{level_label}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
-
-            with _STATE_LOCK:
-                last_rendered_length = printable_length
-
-            if stacked_log_insert:
-                _write('\033[1A\r')
-                _flush_stream()
-                _cursor_positioned_above_stack = True
-
-            _render_progress_stack_locked()
+            self._emit_log_line_locked(
+                normalized_level,
+                level_label,
+                str_msg,
+                allow_defer=True,
+            )
