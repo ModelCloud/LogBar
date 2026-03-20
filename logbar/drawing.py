@@ -6,7 +6,9 @@
 """Shared ANSI-aware drawing primitives for terminal rendering."""
 
 from dataclasses import dataclass
+from functools import lru_cache
 import re
+import unicodedata
 from typing import Callable, Optional, Sequence
 
 
@@ -19,17 +21,188 @@ ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
 BLOCK_PARTIAL_CHARS = ("", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█")
 SUBCELL_RESOLUTION = len(BLOCK_PARTIAL_CHARS) - 1
 
+_ZERO_WIDTH_JOINER = "\u200d"
+_EMOJI_TEXT_VARIATION = "\ufe0e"
+_EMOJI_PRESENTATION_VARIATION = "\ufe0f"
+_KEYCAP_COMBINING = "\u20e3"
+
 
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
 
 
+@lru_cache(maxsize=4096)
+def _is_variation_selector(char: str) -> bool:
+    codepoint = ord(char)
+    return 0xFE00 <= codepoint <= 0xFE0F or 0xE0100 <= codepoint <= 0xE01EF
+
+
+@lru_cache(maxsize=4096)
+def _is_regional_indicator(char: str) -> bool:
+    codepoint = ord(char)
+    return 0x1F1E6 <= codepoint <= 0x1F1FF
+
+
+@lru_cache(maxsize=4096)
+def _is_emoji_modifier(char: str) -> bool:
+    codepoint = ord(char)
+    return 0x1F3FB <= codepoint <= 0x1F3FF
+
+
+@lru_cache(maxsize=4096)
+def _is_keycap_base(char: str) -> bool:
+    return char.isdigit() or char in {"#", "*"}
+
+
+@lru_cache(maxsize=4096)
+def _is_combining_like(char: str) -> bool:
+    if char == _ZERO_WIDTH_JOINER:
+        return False
+
+    if char in {_EMOJI_TEXT_VARIATION, _EMOJI_PRESENTATION_VARIATION, _KEYCAP_COMBINING}:
+        return True
+
+    if _is_variation_selector(char) or _is_emoji_modifier(char):
+        return True
+
+    category = unicodedata.category(char)
+    if category in {"Mn", "Me"}:
+        return True
+
+    if category == "Cf":
+        return True
+
+    return unicodedata.combining(char) != 0
+
+
+@lru_cache(maxsize=4096)
+def _can_expand_to_emoji(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        char in {"#", "*"}
+        or "0" <= char <= "9"
+        or 0x2600 <= codepoint <= 0x27BF
+        or 0x1F000 <= codepoint <= 0x1FAFF
+    )
+
+
+@lru_cache(maxsize=4096)
+def _base_cell_width(char: str) -> int:
+    if not char:
+        return 0
+
+    if char in {"\r", "\n"}:
+        return 0
+
+    if char == "\t":
+        return 1
+
+    if _is_combining_like(char):
+        return 0
+
+    category = unicodedata.category(char)
+    if category.startswith("C"):
+        return 0
+
+    if unicodedata.east_asian_width(char) in {"W", "F"}:
+        return 2
+
+    return 1
+
+
+def _consume_plain_cluster(text: str, start: int) -> tuple[str, int]:
+    length = len(text)
+    cluster = [text[start]]
+    i = start + 1
+
+    if _is_regional_indicator(cluster[0]) and i < length and _is_regional_indicator(text[i]):
+        cluster.append(text[i])
+        i += 1
+
+    while i < length and _is_combining_like(text[i]):
+        cluster.append(text[i])
+        i += 1
+
+    if i < length and text[i] == _KEYCAP_COMBINING and _is_keycap_base(cluster[0]):
+        cluster.append(text[i])
+        i += 1
+
+    while i < length and text[i] == _ZERO_WIDTH_JOINER:
+        cluster.append(text[i])
+        i += 1
+        if i >= length:
+            break
+
+        cluster.append(text[i])
+        i += 1
+
+        while i < length and _is_combining_like(text[i]):
+            cluster.append(text[i])
+            i += 1
+
+        if i < length and text[i] == _KEYCAP_COMBINING and _is_keycap_base(cluster[-1]):
+            cluster.append(text[i])
+            i += 1
+
+    return "".join(cluster), i
+
+
+@lru_cache(maxsize=8192)
+def _cluster_cell_width(cluster: str) -> int:
+    if not cluster:
+        return 0
+
+    if cluster == "\t":
+        return 1
+
+    if any(ch in {"\r", "\n"} for ch in cluster):
+        return 0
+
+    if _KEYCAP_COMBINING in cluster:
+        return 2
+
+    if any(_is_regional_indicator(ch) for ch in cluster):
+        return 2
+
+    if _ZERO_WIDTH_JOINER in cluster:
+        return 2 if any(_base_cell_width(ch) > 0 for ch in cluster) else 0
+
+    width = sum(_base_cell_width(ch) for ch in cluster)
+    if width <= 0:
+        return 0
+
+    if _EMOJI_PRESENTATION_VARIATION in cluster and any(_can_expand_to_emoji(ch) for ch in cluster):
+        return max(2, width)
+
+    return width
+
+
+def _iter_plain_clusters(text: str):
+    i = 0
+    while i < len(text):
+        cluster, i = _consume_plain_cluster(text, i)
+        yield cluster
+
+
+def iter_display_atoms(text: str):
+    i = 0
+    while i < len(text):
+        if text[i] == "\x1b":
+            match = ANSI_ESCAPE_RE.match(text, i)
+            if match:
+                yield True, match.group(0), 0
+                i = match.end()
+                continue
+
+        cluster, i = _consume_plain_cluster(text, i)
+        yield False, cluster, _cluster_cell_width(cluster)
+
+
 def visible_length(text: str) -> int:
     if not text:
         return 0
-    cleaned = strip_ansi(text)
-    cleaned = cleaned.replace("\r", "").replace("\n", "")
-    return len(cleaned)
+    cleaned = strip_ansi(text).replace("\r", "").replace("\n", "")
+    return sum(_cluster_cell_width(cluster) for cluster in _iter_plain_clusters(cleaned))
 
 
 def iter_ansi_tokens(text: str):
@@ -51,19 +224,17 @@ def truncate_ansi(text: str, limit: int) -> str:
 
     result = []
     printable = 0
-    i = 0
 
-    while i < len(text) and printable < limit:
-        if text[i] == "\x1b":
-            match = ANSI_ESCAPE_RE.match(text, i)
-            if match:
-                result.append(match.group(0))
-                i = match.end()
-                continue
+    for is_ansi, token, width in iter_display_atoms(text):
+        if is_ansi:
+            result.append(token)
+            continue
 
-        result.append(text[i])
-        printable += 1
-        i += 1
+        if printable + width > limit:
+            break
+
+        result.append(token)
+        printable += width
 
     if printable >= limit:
         result.append(ANSI_RESET)

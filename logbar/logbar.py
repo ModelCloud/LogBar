@@ -15,6 +15,7 @@ from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 from .terminal import terminal_size
 from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
+from .drawing import visible_length
 
 # global static/shared logger instance
 logger = None
@@ -187,6 +188,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
 
 _attached_progress_bars = []  # type: list["ProgressBar"]
 _last_drawn_progress_count = 0
+_last_rendered_terminal_size: Optional[tuple[int, int]] = None
 _cursor_positioned_above_stack = False
 _cursor_hidden = False
 _refresh_thread: Optional[threading.Thread] = None
@@ -232,7 +234,7 @@ def _set_cursor_visibility_locked(visible: bool) -> None:
 
 
 def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bool = False) -> None:
-    global _last_drawn_progress_count, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _cursor_positioned_above_stack
 
     count = _last_drawn_progress_count
     supports_cursor = _stdout_supports_cursor_movement()
@@ -241,6 +243,7 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bo
         if not _notebook_render_stack([]):
             _notebook_render_plain_stdout([])
         _last_drawn_progress_count = 0
+        _last_rendered_terminal_size = None
         _cursor_positioned_above_stack = False
         if show_cursor:
             _set_cursor_visibility_locked(True)
@@ -276,6 +279,7 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bo
         _flush_stream()
 
     _last_drawn_progress_count = 0
+    _last_rendered_terminal_size = None
     _cursor_positioned_above_stack = False
     if show_cursor:
         _set_cursor_visibility_locked(True)
@@ -318,12 +322,13 @@ def _active_progress_bars() -> list["ProgressBar"]:
 
 
 def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
-    global _last_drawn_progress_count, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _cursor_positioned_above_stack
 
     if columns_hint is not None:
         columns = columns_hint
+        _, rows = terminal_size()
     else:
-        columns, _ = terminal_size()
+        columns, rows = terminal_size()
 
     bars = _active_progress_bars()
     to_remove = []
@@ -372,10 +377,16 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
             _notebook_render_plain_stdout(lines)
             _flush_stream()
         _last_drawn_progress_count = 0
+        _last_rendered_terminal_size = None
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
         _record_progress_activity_locked()
         return
+
+    terminal_columns = max(0, int(columns))
+    terminal_rows = max(0, int(rows))
+    if terminal_rows > 0 and len(lines) > terminal_rows:
+        lines = lines[-terminal_rows:]
 
     previous_count = _last_drawn_progress_count
     sequences: list[str] = []
@@ -397,6 +408,7 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
             _write(''.join(sequences))
         _flush_stream()
         _last_drawn_progress_count = 0
+        _last_rendered_terminal_size = (terminal_columns, terminal_rows)
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
         _record_progress_activity_locked()
@@ -414,6 +426,7 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
     _write(''.join(sequences))
     _flush_stream()
     _last_drawn_progress_count = len(lines)
+    _last_rendered_terminal_size = (terminal_columns, terminal_rows)
     _cursor_positioned_above_stack = True
     _set_cursor_visibility_locked(False)
     _record_progress_activity_locked()
@@ -843,10 +856,11 @@ class LogBar(logging.Logger):
             with _STATE_LOCK:
                 previous_render_length = last_rendered_length
 
-            line_length = level_width + 1 + len(str_msg)
+            message_width = visible_length(str_msg)
+            line_length = level_width + 1 + message_width
 
             if columns > 0:
-                padding_needed = max(0, columns - level_width - 2 - len(str_msg))
+                padding_needed = max(0, columns - level_width - 2 - message_width)
                 rendered_message = f"{str_msg}{' ' * padding_needed}"
                 printable_length = columns
             else:

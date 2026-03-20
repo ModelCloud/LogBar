@@ -786,7 +786,7 @@ class ProgressBar:
             left_current = self.step() - self.ui_show_left_steps_offset
             left_total = total_steps - self.ui_show_left_steps_offset
             self.ui_show_left_steps_text = f"[{left_current} of {left_total}] "
-            self.ui_show_left_steps_text_max_len = len(self.ui_show_left_steps_text)
+            self.ui_show_left_steps_text_max_len = visible_length(self.ui_show_left_steps_text)
             pre_bar_size += self.ui_show_left_steps_text_max_len
 
         padding = ""
@@ -803,7 +803,8 @@ class ProgressBar:
 
         available_columns = columns if columns is not None and columns > 0 else 0
 
-        bar_length = max(0, available_columns - pre_bar_size - len(log_text) - 2) if available_columns else 0
+        log_text_width = visible_length(log_text)
+        bar_length = max(0, available_columns - pre_bar_size - log_text_width - 2) if available_columns else 0
         self.bar_length = bar_length
 
         total_units = bar_length * SUBCELL_RESOLUTION
@@ -879,11 +880,11 @@ class ProgressBar:
         rendered_out = ''.join(segments_rendered)
 
         if columns is not None:
-            if len(plain_out) > columns:
-                plain_out = plain_out[:columns]
+            plain_width = visible_length(plain_out)
+            if plain_width > columns:
                 rendered_out = self._truncate_ansi(rendered_out, columns)
-            elif len(plain_out) < columns:
-                pad = " " * (columns - len(plain_out))
+            elif plain_width < columns:
+                pad = " " * (columns - plain_width)
                 plain_out += pad
                 rendered_out += pad
 
@@ -1134,7 +1135,8 @@ class RollingProgressBar(ProgressBar):
 
         available_columns = columns if columns is not None and columns > 0 else 0
 
-        bar_length = max(0, available_columns - pre_bar_size - len(log_text) - 2) if available_columns else 0
+        log_text_width = visible_length(log_text)
+        bar_length = max(0, available_columns - pre_bar_size - log_text_width - 2) if available_columns else 0
         self.bar_length = bar_length
 
         bar_plain, bar_rendered = self._render_animation(bar_length)

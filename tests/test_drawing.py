@@ -31,3 +31,17 @@ class TestDrawing(unittest.TestCase):
         self.assertEqual(strip_ansi(text), "red-blue")
         self.assertEqual(visible_length(text), 8)
         self.assertEqual(strip_ansi(truncate_ansi(text, 5)), "red-b")
+
+    def test_ansi_helpers_measure_wide_combining_and_flag_clusters(self):
+        text = "\033[31m界🙂e\u0301🇺🇸\033[0m"
+
+        self.assertEqual(strip_ansi(text), "界🙂e\u0301🇺🇸")
+        self.assertEqual(visible_length(text), 7)
+        self.assertEqual(strip_ansi(truncate_ansi(text, 4)), "界🙂")
+        self.assertEqual(strip_ansi(truncate_ansi(text, 5)), "界🙂e\u0301")
+
+    def test_ansi_helpers_keep_zwj_emoji_clusters_atomic(self):
+        text = "A👨‍👩‍👧‍👦B"
+
+        self.assertEqual(visible_length(text), 4)
+        self.assertEqual(strip_ansi(truncate_ansi(text, 3)), "A👨‍👩‍👧‍👦")

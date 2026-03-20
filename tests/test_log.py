@@ -275,3 +275,53 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.clear_progress_stack()
             for row in rows:
                 logbar_module.detach_progress_bar(row)
+
+    def test_progress_stack_reclips_after_terminal_resize(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        current_size = [(28, 4)]
+        rows = [StaticRenderable(f"row-{idx}-xxxxxxxxxxxxxxxx") for idx in range(5)]
+        buffer = TTYBuffer()
+
+        def terminal_size_provider():
+            return current_size[0]
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", side_effect=terminal_size_provider), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                current_size[0] = (18, 2)
+                logbar_module.render_progress_stack()
+
+            lines = extract_rendered_lines(buffer.getvalue())
+            final_frame = lines[-2:]
+            expected = [row.line[:18].ljust(18) for row in rows[-2:]]
+
+            self.assertEqual(final_frame, expected)
+            self.assertEqual(logbar_module._last_drawn_progress_count, 2)
+            self.assertEqual(logbar_module._last_rendered_terminal_size, (18, 2))
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)
