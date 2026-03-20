@@ -23,7 +23,7 @@ from logbar.logbar import _active_progress_bars
 log = LogBar.shared(override_logger=True)
 
 
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def extract_rendered_lines(buffer: str):

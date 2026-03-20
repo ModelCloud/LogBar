@@ -5,26 +5,12 @@
 
 """Column layout helpers for LogBar output."""
 
-import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
+from .drawing import strip_ansi as _strip_ansi
+from .drawing import visible_length as _visible_length
 from .terminal import terminal_size
-
-
-ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
-
-
-def _strip_ansi(text: str) -> str:
-    return ANSI_ESCAPE_RE.sub("", text)
-
-
-def _visible_length(text: str) -> int:
-    if not text:
-        return 0
-    cleaned = _strip_ansi(text)
-    cleaned = cleaned.replace("\r", "").replace("\n", "")
-    return len(cleaned)
 
 
 def _pad_visible(text: str, target: int) -> str:

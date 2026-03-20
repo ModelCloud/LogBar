@@ -5,6 +5,7 @@
 
 import io
 import logging
+import re
 import sys
 import threading
 from contextlib import redirect_stdout
@@ -16,6 +17,27 @@ from logbar import LogBar
 from logbar.buffer import QueueingStdout, get_buffered_stdout
 
 log = LogBar.shared(override_logger=True)
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def extract_rendered_lines(buffer: str):
+    cleaned = ANSI_ESCAPE_RE.sub('', buffer)
+    lines = []
+    accumulator = []
+
+    for char in cleaned:
+        if char in ('\r', '\n'):
+            if accumulator:
+                lines.append(''.join(accumulator))
+                accumulator = []
+        else:
+            accumulator.append(char)
+
+    if accumulator:
+        lines.append(''.join(accumulator))
+
+    return [line for line in lines if line]
 
 
 class TestProgressBar(unittest.TestCase):
@@ -203,3 +225,205 @@ class TestProgressBar(unittest.TestCase):
                 except Exception:
                     pass
             sys.stdout = original_stdout
+
+    def test_logging_above_active_progress_stack_avoids_scroll_clear_path(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        columns = 40
+        stack_lines = [
+            "top stack row".ljust(columns),
+            "bottom stack row".ljust(columns),
+        ]
+        rows = [StaticRenderable(line) for line in stack_lines]
+        buffer = TTYBuffer()
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                log.info("stacked message")
+
+            raw = buffer.getvalue()
+            lines = extract_rendered_lines(raw)
+
+            self.assertIn("\033[1L", raw)
+            self.assertNotIn("\033[1S", raw)
+            self.assertTrue(any("stacked message" in line for line in lines))
+            for stack_line in stack_lines:
+                self.assertIn(stack_line, lines)
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)
+
+    def test_progress_stack_reclips_after_terminal_resize(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        current_size = [(28, 4)]
+        rows = [StaticRenderable(f"row-{idx}-xxxxxxxxxxxxxxxx") for idx in range(5)]
+        buffer = TTYBuffer()
+
+        def terminal_size_provider():
+            return current_size[0]
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", side_effect=terminal_size_provider), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                current_size[0] = (18, 2)
+                logbar_module.render_progress_stack()
+
+            lines = extract_rendered_lines(buffer.getvalue())
+            final_frame = lines[-2:]
+            expected = [row.line[:18].ljust(18) for row in rows[-2:]]
+
+            self.assertEqual(final_frame, expected)
+            self.assertEqual(logbar_module._last_drawn_progress_count, 2)
+            self.assertEqual(logbar_module._last_rendered_terminal_size, (18, 2))
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)
+
+    def test_progress_stack_skips_noop_redraw_for_identical_frame(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        columns = 32
+        rows = [
+            StaticRenderable("alpha-row"),
+            StaticRenderable("beta-row"),
+        ]
+        buffer = TTYBuffer()
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                checkpoint = len(buffer.getvalue())
+                logbar_module.render_progress_stack()
+
+            delta = buffer.getvalue()[checkpoint:]
+            expected = [row.line[:columns].ljust(columns) for row in rows]
+
+            self.assertEqual(delta, "")
+            self.assertEqual(logbar_module._last_rendered_progress_lines, expected)
+            self.assertEqual(logbar_module._last_drawn_progress_count, len(expected))
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)
+
+    def test_progress_stack_redraws_only_dirty_rows(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        columns = 36
+        top_row = StaticRenderable("top-row")
+        bottom_row = StaticRenderable("bottom-original")
+        rows = [top_row, bottom_row]
+        buffer = TTYBuffer()
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                checkpoint = len(buffer.getvalue())
+                bottom_row.line = "bottom-updated"
+                logbar_module.render_progress_stack()
+
+            delta = buffer.getvalue()[checkpoint:]
+            cleaned_delta = ANSI_ESCAPE_RE.sub('', delta)
+            expected = [row.line[:columns].ljust(columns) for row in rows]
+
+            self.assertNotIn("\033[J", delta)
+            self.assertIn("\033[2K", delta)
+            self.assertNotIn(top_row.line, cleaned_delta)
+            self.assertIn(bottom_row.line, cleaned_delta)
+            self.assertEqual(logbar_module._last_rendered_progress_lines, expected)
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)

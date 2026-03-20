@@ -21,6 +21,7 @@
 - Shared singleton logger with per-level colorized output.
 - `once` helpers prevent duplicate log spam automatically.
 - Stackable progress bars that stay anchored while your logs flow freely.
+- Sub-cell Unicode bar rasterization for smoother, more accurate terminal fills.
 - Built-in styling for progress bar fills, colors, gradients, and head glyphs.
 - Animated progress titles with a subtle sweeping highlight.
   Set `LOGBAR_ANIMATION=0` to disable the highlight animation.
@@ -36,6 +37,16 @@ pip install logbar
 ```
 
 LogBar works out-of-the-box with CPython 3.8+ on Linux, macOS, and Windows terminals.
+
+## Rendering Engine
+
+LogBar intentionally uses an ANSI stream renderer with a shared Unicode cell-canvas instead of forcing a `curses`/`ncurses` backend:
+
+- `curses` targets character-cell terminals, not pixel framebuffers, so it does not unlock true pixel-level drawing.
+- CPython ships `curses` on Unix-like systems, but not on Windows, which would require an extra compatibility package.
+- LogBar interleaves normal logging with live progress bars, so preserving plain stdout semantics is a better fit than switching the whole process into fullscreen terminal-app mode.
+
+The internal drawing engine now rasterizes progress bars at sub-cell resolution using Unicode block elements, which gives smoother fills without adding runtime dependencies.
 
 # Quick Start
 
@@ -184,6 +195,28 @@ pb.head('>', color='82')  # custom head glyph + color index
 
 `ProgressBar.available_styles()` lists builtin styles, and you can register additional ones with `ProgressBar.register_style(...)` or switch defaults globally via `ProgressBar.set_default_style(...)`. Custom colors accept ANSI escape codes, 256-color indexes (e.g. `'82'`), or hex strings (`'#4c1d95'`).
 
+For direct style registration and introspection, import the advanced style APIs from `logbar.progress`:
+
+```py
+from logbar.progress import ProgressBar, ProgressStyle, progress_style_names
+
+print(ProgressBar.available_styles())
+print(progress_style_names())
+
+ProgressBar.register_style(
+    ProgressStyle(
+        name="ice",
+        fill_char="■",
+        empty_char="·",
+        fill_colors=("#7dd3fc", "#38bdf8"),
+        gradient=True,
+        head_char=">",
+    )
+)
+
+ProgressBar.set_default_style("ice")
+```
+
 Styled output (plain-text view with ANSI removed):
 
 ```
@@ -233,6 +266,14 @@ cols.update({
 })
 ```
 
+Useful column helpers:
+
+- `cols.info.header()` or `cols.info.headers()` prints the current border + header block.
+- `cols.info.simulate(...)` recomputes widths without emitting a row.
+- `cols.update(...)` changes labels, spans, or widths at runtime.
+- `cols.width()` returns the current rendered table width, including borders.
+- `cols.widths`, `cols.padding`, and `cols.column_specs` expose the current layout.
+
 # Replacing `tqdm`
 
 The API mirrors common `tqdm` patterns while staying more Pythonic:
@@ -260,7 +301,7 @@ with tqdm.tqdm(total=len(items)) as pb:
 with log.pb(items).manual() as pb:
     for item in pb:
         handle(item)
-        pb.render()
+        pb.draw()
 ```
 
 # Advanced Tips
@@ -268,3 +309,69 @@ with log.pb(items).manual() as pb:
 - Combine columns and progress bars by logging summaries at key checkpoints.
 - Use `log.warn.once(...)` to keep noisy health checks readable.
 - For multi-line messages, pre-format text and pass it as a single string; LogBar keeps borders intact.
+
+# API Reference
+
+## `LogBar`
+
+- `LogBar.shared(override_logger=False)` returns the process-wide shared logger.
+- `override_logger=True` is useful in tests or embedded environments that replaced the active `logging` logger class.
+- Level methods: `debug`, `info`, `warn`, `error`, `critical`.
+- Deduplicated level methods: `debug.once`, `info.once`, `warn.once`, `error.once`, `critical.once`.
+- `setLevel(level)` accepts strings like `"INFO"`, `"WARN"`, `"CRIT"`, numeric levels, numeric strings, and constants such as `LogBar.WARNING`.
+- `pb(iterable_or_total, output_interval=None)` creates and attaches a progress bar.
+- `spinner(title="", interval=0.5, tail_length=4)` creates and attaches an indeterminate rolling progress bar.
+- `columns(..., cols=None, width=None, padding=2)` creates a column printer.
+
+## `ProgressBar`
+
+`log.pb(...)` returns an attached `ProgressBar`. For direct imports, use:
+
+```py
+from logbar.progress import ProgressBar, ProgressStyle
+```
+
+Common chainable methods:
+
+- `title(text)` and `subtitle(text)`
+- `style(name_or_style)`
+- `fill(fill_char, empty=None)`
+- `colors(fill=None, empty=None, gradient=None, head=None)`
+- `head(char=None, color=None)`
+- `set(show_left_steps=None, left_steps_offset=None)`
+- `output_interval(interval)`
+- `mode(RenderMode)` if you prefer explicit mode switching over `auto()` / `manual()`
+
+Render and lifecycle control:
+
+- `draw(force=False)` renders the current snapshot immediately.
+- `auto()` enables redraw-on-iteration mode.
+- `manual()` disables automatic redraw so you can call `draw()` yourself.
+- `attach(logger=None)` attaches the bar to a logger.
+- `detach()` detaches the bar without destroying the object.
+- `close()` forces a final render if needed and removes the bar from the stack.
+- `step()` returns the current iteration index and `next()` advances once outside a `for` loop.
+
+Style registry helpers:
+
+- `ProgressBar.available_styles()`
+- `ProgressBar.register_style(style)`
+- `ProgressBar.set_default_style(style)`
+- `ProgressBar.default_style()`
+
+## `RollingProgressBar`
+
+`log.spinner(...)` returns a `RollingProgressBar`, which inherits from `ProgressBar` and adds:
+
+- `pulse()` to advance the spinner immediately between automatic ticks.
+- `interval` and `tail_length` constructor arguments for animation speed and tail size.
+
+## `ColumnsPrinter`
+
+`log.columns(...)` returns a `ColumnsPrinter` with per-level proxies:
+
+- `cols.info(...)`, `cols.warn(...)`, `cols.error(...)`, `cols.debug(...)`, `cols.critical(...)`
+- `cols.info.header()` and `cols.info.headers()` for border + header emission
+- `cols.info.simulate(...)` for dry-run width growth without output
+- `cols.update(...)` for runtime schema changes
+- `cols.width()` for the current rendered width

@@ -24,9 +24,21 @@ from .logbar import (
     render_lock,
     render_progress_stack,
 )
-
 if TYPE_CHECKING:  # pragma: no cover - type hints without runtime import cycle
     from .logbar import LogBar as LogBarType
+from .drawing import (
+    ANSI_BOLD_RESET,
+    ANSI_RESET,
+    BLOCK_PARTIAL_CHARS,
+    SUBCELL_RESOLUTION,
+    TITLE_BASE_COLOR,
+    TITLE_HIGHLIGHT_COLOR,
+    CellBarRenderer,
+    iter_ansi_tokens,
+    strip_ansi,
+    truncate_ansi,
+    visible_length,
+)
 from .terminal import terminal_size
 from .util import auto_iterable
 
@@ -41,40 +53,6 @@ def _safe_nullcontext(_nullcontext=nullcontext, _fallback=_fallback_nullcontext)
     if callable(_nullcontext):
         return _nullcontext()
     return _fallback()
-
-
-# ANSI helpers for the animated title effect + colour styling
-ANSI_RESET = "\033[0m"
-ANSI_BOLD_RESET = "\033[22m"
-TITLE_BASE_COLOR = "\033[38;5;250m"
-TITLE_HIGHLIGHT_COLOR = "\033[1m\033[38;5;15m"
-ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
-
-
-def _strip_ansi(text: str) -> str:
-    return ANSI_ESCAPE_RE.sub("", text)
-
-
-def _visible_length(text: str) -> int:
-    if not text:
-        return 0
-    cleaned = _strip_ansi(text)
-    cleaned = cleaned.replace("\r", "").replace("\n", "")
-    return len(cleaned)
-
-
-def _iter_ansi_tokens(text: str):
-    i = 0
-    while i < len(text):
-        if text[i] == "\x1b":
-            match = ANSI_ESCAPE_RE.match(text, i)
-            if match:
-                yield True, match.group(0)
-                i = match.end()
-                continue
-        yield False, text[i]
-        i += 1
-
 
 @lru_cache(maxsize=1)
 def _env_animation_enabled() -> bool:
@@ -149,6 +127,7 @@ class ProgressStyle:
     name: str
     fill_char: str = "█"
     empty_char: str = "-"
+    fill_ramp: Sequence[str] = BLOCK_PARTIAL_CHARS
     fill_colors: Sequence[str] = ()
     empty_color: str = ""
     gradient: bool = False
@@ -160,6 +139,9 @@ class ProgressStyle:
 
     def with_empty_char(self, char: str) -> "ProgressStyle":
         return replace(self, empty_char=char)
+
+    def with_fill_ramp(self, chars: Optional[Sequence[str]]) -> "ProgressStyle":
+        return replace(self, fill_ramp=tuple(chars) if chars is not None else ())
 
     def with_colors(
         self,
@@ -183,55 +165,51 @@ class ProgressStyle:
         return replace(self, head_char=char)
 
     def render(self, filled: int, empty: int) -> tuple[str, str]:
-        # Build the plain-text representation (no ANSI) first.
-        if self.head_char and filled > 0:
-            plain_fill = self.fill_char * max(filled - 1, 0) + self.head_char
-        else:
-            plain_fill = self.fill_char * filled
-        plain_empty = self.empty_char * empty
-        plain_bar = plain_fill + plain_empty
+        result = self._bar_renderer().render(
+            filled=filled,
+            empty=empty,
+            select_color=self._select_color,
+            empty_color=self.empty_color,
+            head_color=self.head_color,
+        )
+        return result.plain, result.rendered
 
-        rendered_segments: list[str] = []
+    def render_units(
+        self,
+        total_cells: int,
+        filled_units: int,
+        *,
+        units_per_cell: int = SUBCELL_RESOLUTION,
+    ) -> tuple[str, str]:
+        result = self._bar_renderer(units_per_cell=units_per_cell).render_units(
+            total_cells=total_cells,
+            filled_units=filled_units,
+            select_color=self._select_color,
+            empty_color=self.empty_color,
+            head_color=self.head_color,
+        )
+        return result.plain, result.rendered
 
-        def select_color(idx: int, total: int) -> str:
-            if not self.fill_colors:
-                return ""
-            palette = self.fill_colors
-            if self.gradient and len(palette) > 1 and total > 1:
-                pos = idx / (total - 1)
-                palette_index = min(int(pos * (len(palette) - 1)), len(palette) - 1)
-                return palette[palette_index]
-            return palette[idx % len(palette)]
+    def _bar_renderer(self, units_per_cell: int = SUBCELL_RESOLUTION) -> CellBarRenderer:
+        return CellBarRenderer(
+            fill_char=self.fill_char,
+            empty_char=self.empty_char,
+            head_char=self.head_char,
+            partial_chars=self.fill_ramp,
+            units_per_cell=units_per_cell,
+        )
 
-        current_color: Optional[str] = None
-        for idx in range(filled):
-            desired_color = select_color(idx, filled)
-            if self.head_color and idx == filled - 1:
-                desired_color = self.head_color
+    def _select_color(self, idx: int, total: int) -> str:
+        if not self.fill_colors:
+            return ""
 
-            if desired_color != current_color:
-                if current_color:
-                    rendered_segments.append(ANSI_RESET)
-                if desired_color:
-                    rendered_segments.append(desired_color)
-                current_color = desired_color
+        palette = self.fill_colors
+        if self.gradient and len(palette) > 1 and total > 1:
+            pos = idx / (total - 1)
+            palette_index = min(int(pos * (len(palette) - 1)), len(palette) - 1)
+            return palette[palette_index]
 
-            rendered_segments.append(plain_fill[idx])
-
-        if current_color:
-            rendered_segments.append(ANSI_RESET)
-            current_color = None
-
-        if empty and self.empty_color:
-            rendered_segments.append(self.empty_color)
-            rendered_segments.append(plain_empty)
-            rendered_segments.append(ANSI_RESET)
-        else:
-            rendered_segments.append(plain_empty)
-
-        rendered_bar = ''.join(rendered_segments)
-
-        return plain_bar, rendered_bar
+        return palette[idx % len(palette)]
 
 
 def _register_default_styles() -> dict[str, ProgressStyle]:
@@ -535,7 +513,7 @@ class ProgressBar:
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Title should not be updated after iteration has started unless in `manual` render mode.")
 
-        title_len = _visible_length(title)
+        title_len = visible_length(title)
         if title_len > self.max_title_len:
             self.max_title_len = title_len
 
@@ -554,7 +532,7 @@ class ProgressBar:
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Sub-title should not be updated after iteration has started unless in `manual` render mode.")
 
-        subtitle_len = _visible_length(subtitle)
+        subtitle_len = visible_length(subtitle)
         if subtitle_len > self.max_subtitle_len:
             self.max_subtitle_len = subtitle_len
 
@@ -808,27 +786,41 @@ class ProgressBar:
             left_current = self.step() - self.ui_show_left_steps_offset
             left_total = total_steps - self.ui_show_left_steps_offset
             self.ui_show_left_steps_text = f"[{left_current} of {left_total}] "
-            self.ui_show_left_steps_text_max_len = len(self.ui_show_left_steps_text)
+            self.ui_show_left_steps_text_max_len = visible_length(self.ui_show_left_steps_text)
             pre_bar_size += self.ui_show_left_steps_text_max_len
 
         padding = ""
 
         if self._title:
-            title_len = _visible_length(self._title)
+            title_len = visible_length(self._title)
             if title_len < self.max_title_len:
                 padding += " " * (self.max_title_len - title_len)
 
         if self._subtitle:
-            subtitle_len = _visible_length(self._subtitle)
+            subtitle_len = visible_length(self._subtitle)
             if subtitle_len < self.max_subtitle_len:
                 padding += " " * (self.max_subtitle_len - subtitle_len)
 
         available_columns = columns if columns is not None and columns > 0 else 0
 
-        bar_length = max(0, available_columns - pre_bar_size - len(log_text) - 2) if available_columns else 0
-        filled_length = int(bar_length * self.step() // effective_total) if bar_length else 0
-        empty_length = max(bar_length - filled_length, 0)
-        bar_plain, bar_rendered = self._style.render(filled_length, empty_length)
+        log_text_width = visible_length(log_text)
+        bar_length = max(0, available_columns - pre_bar_size - log_text_width - 2) if available_columns else 0
+        self.bar_length = bar_length
+
+        total_units = bar_length * SUBCELL_RESOLUTION
+        if self.step() >= effective_total and total_units > 0:
+            filled_units = total_units
+        elif total_units > 0:
+            filled_units = int((self.step() * total_units) / effective_total)
+            if 0 < self.step() < effective_total and filled_units == 0:
+                filled_units = 1
+        else:
+            filled_units = 0
+
+        bar_plain, bar_rendered = self._style.render_units(
+            total_cells=bar_length,
+            filled_units=filled_units,
+        )
 
         rendered_line = self._render_line(
             bar_plain=bar_plain,
@@ -861,14 +853,14 @@ class ProgressBar:
         if self._title:
             if animate_title:
                 animated_title = self._animated_text(self._title)
-                append_segment(self._title, animated_title, _strip_ansi(self._title))
+                append_segment(self._title, animated_title, strip_ansi(self._title))
             else:
-                append_segment(self._title, plain=_strip_ansi(self._title))
+                append_segment(self._title, plain=strip_ansi(self._title))
             append_segment(" ")
 
         if self._subtitle:
             subtitle_text = f"{self._subtitle} "
-            append_segment(subtitle_text, plain=_strip_ansi(subtitle_text))
+            append_segment(subtitle_text, plain=strip_ansi(subtitle_text))
 
         if pre_bar_padding:
             append_segment(pre_bar_padding)
@@ -888,11 +880,11 @@ class ProgressBar:
         rendered_out = ''.join(segments_rendered)
 
         if columns is not None:
-            if len(plain_out) > columns:
-                plain_out = plain_out[:columns]
+            plain_width = visible_length(plain_out)
+            if plain_width > columns:
                 rendered_out = self._truncate_ansi(rendered_out, columns)
-            elif len(plain_out) < columns:
-                pad = " " * (columns - len(plain_out))
+            elif plain_width < columns:
+                pad = " " * (columns - plain_width)
                 plain_out += pad
                 rendered_out += pad
 
@@ -904,7 +896,7 @@ class ProgressBar:
 
         period = max(self._title_animation_period, 1e-6)
         elapsed = time.time() - self._title_animation_start
-        text_len = _visible_length(text)
+        text_len = visible_length(text)
         if text_len == 0:
             return text
 
@@ -917,7 +909,7 @@ class ProgressBar:
 
         parts = [TITLE_BASE_COLOR]
         visible_idx = 0
-        for is_ansi, token in _iter_ansi_tokens(text):
+        for is_ansi, token in iter_ansi_tokens(text):
             if is_ansi:
                 parts.append(token)
                 continue
@@ -934,33 +926,7 @@ class ProgressBar:
         return ''.join(parts)
 
     def _truncate_ansi(self, text: str, limit: int) -> str:
-        if limit <= 0:
-            # ensure we reset styles even if nothing is shown
-            return ANSI_RESET
-
-        result = []
-        printable = 0
-        i = 0
-        while i < len(text) and printable < limit:
-            char = text[i]
-            if char == '\033':
-                end = i + 1
-                while end < len(text) and text[end] != 'm':
-                    end += 1
-                end = min(end + 1, len(text))
-                result.append(text[i:end])
-                i = end
-                continue
-
-            result.append(char)
-            printable += 1
-            i += 1
-
-        # ensure the terminal color state is restored even if we sliced mid-sequence
-        if printable >= limit:
-            result.append(ANSI_RESET)
-
-        return ''.join(result)
+        return truncate_ansi(text, limit)
 
     def _should_animate_title(self) -> bool:
         if not _env_animation_enabled():
@@ -1158,18 +1124,19 @@ class RollingProgressBar(ProgressBar):
         padding = ""
 
         if self._title:
-            title_len = _visible_length(self._title)
+            title_len = visible_length(self._title)
             if title_len < self.max_title_len:
                 padding += " " * (self.max_title_len - title_len)
 
         if self._subtitle:
-            subtitle_len = _visible_length(self._subtitle)
+            subtitle_len = visible_length(self._subtitle)
             if subtitle_len < self.max_subtitle_len:
                 padding += " " * (self.max_subtitle_len - subtitle_len)
 
         available_columns = columns if columns is not None and columns > 0 else 0
 
-        bar_length = max(0, available_columns - pre_bar_size - len(log_text) - 2) if available_columns else 0
+        log_text_width = visible_length(log_text)
+        bar_length = max(0, available_columns - pre_bar_size - log_text_width - 2) if available_columns else 0
         self.bar_length = bar_length
 
         bar_plain, bar_rendered = self._render_animation(bar_length)

@@ -15,6 +15,7 @@ from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 from .terminal import terminal_size
 from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
+from .drawing import visible_length
 
 # global static/shared logger instance
 logger = None
@@ -187,6 +188,8 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
 
 _attached_progress_bars = []  # type: list["ProgressBar"]
 _last_drawn_progress_count = 0
+_last_rendered_terminal_size: Optional[tuple[int, int]] = None
+_last_rendered_progress_lines: list[str] = []
 _cursor_positioned_above_stack = False
 _cursor_hidden = False
 _refresh_thread: Optional[threading.Thread] = None
@@ -232,7 +235,7 @@ def _set_cursor_visibility_locked(visible: bool) -> None:
 
 
 def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bool = False) -> None:
-    global _last_drawn_progress_count, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
 
     count = _last_drawn_progress_count
     supports_cursor = _stdout_supports_cursor_movement()
@@ -241,12 +244,16 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bo
         if not _notebook_render_stack([]):
             _notebook_render_plain_stdout([])
         _last_drawn_progress_count = 0
+        _last_rendered_terminal_size = None
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         if show_cursor:
             _set_cursor_visibility_locked(True)
         return
 
     if count == 0:
+        _last_rendered_terminal_size = None
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         if show_cursor:
             _set_cursor_visibility_locked(True)
@@ -276,9 +283,32 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bo
         _flush_stream()
 
     _last_drawn_progress_count = 0
+    _last_rendered_terminal_size = None
+    _last_rendered_progress_lines = []
     _cursor_positioned_above_stack = False
     if show_cursor:
         _set_cursor_visibility_locked(True)
+
+
+def _prepare_progress_stack_for_log_locked() -> bool:
+    """Reserve one row above the active stack for a log line without scrolling it."""
+
+    count = _last_drawn_progress_count
+    if count == 0:
+        return False
+
+    if not _stdout_supports_cursor_movement():
+        return False
+
+    if not _cursor_positioned_above_stack:
+        return False
+
+    # Insert a blank row at the top of the current stack so the log line's
+    # trailing newline lands inside the stack footprint instead of pushing the
+    # whole render window down by a row.
+    _write('\033[1B\r\033[1L\033[1A\r')
+    _flush_stream()
+    return True
 
 
 def clear_progress_stack(lock_held: bool = False) -> None:
@@ -297,12 +327,13 @@ def _active_progress_bars() -> list["ProgressBar"]:
 
 
 def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
-    global _last_drawn_progress_count, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
 
     if columns_hint is not None:
         columns = columns_hint
+        _, rows = terminal_size()
     else:
-        columns, _ = terminal_size()
+        columns, rows = terminal_size()
 
     bars = _active_progress_bars()
     to_remove = []
@@ -351,13 +382,56 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
             _notebook_render_plain_stdout(lines)
             _flush_stream()
         _last_drawn_progress_count = 0
+        _last_rendered_terminal_size = None
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
         _record_progress_activity_locked()
         return
 
+    terminal_columns = max(0, int(columns))
+    terminal_rows = max(0, int(rows))
+    if terminal_rows > 0 and len(lines) > terminal_rows:
+        lines = lines[-terminal_rows:]
+
     previous_count = _last_drawn_progress_count
+    previous_lines = list(_last_rendered_progress_lines)
+    size_changed = _last_rendered_terminal_size != (terminal_columns, terminal_rows)
     sequences: list[str] = []
+
+    can_diff_redraw = (
+        previous_count > 0
+        and _cursor_positioned_above_stack
+        and not size_changed
+        and len(previous_lines) == len(lines)
+    )
+
+    if lines and can_diff_redraw:
+        changed_indexes = [
+            index for index, (old_line, new_line) in enumerate(zip(previous_lines, lines))
+            if old_line != new_line
+        ]
+
+        if changed_indexes:
+            for index in changed_indexes:
+                offset = index + 1
+                sequences.append(f'\033[{offset}B')
+                sequences.append('\r')
+                sequences.append('\033[2K')
+                sequences.append(lines[index])
+                sequences.append('\r')
+                sequences.append(f'\033[{offset}A')
+
+            _write(''.join(sequences))
+            _flush_stream()
+
+        _last_drawn_progress_count = len(lines)
+        _last_rendered_terminal_size = (terminal_columns, terminal_rows)
+        _last_rendered_progress_lines = list(lines)
+        _cursor_positioned_above_stack = True
+        _set_cursor_visibility_locked(False)
+        _record_progress_activity_locked()
+        return
 
     if previous_count:
         if _cursor_positioned_above_stack:
@@ -376,6 +450,8 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
             _write(''.join(sequences))
         _flush_stream()
         _last_drawn_progress_count = 0
+        _last_rendered_terminal_size = (terminal_columns, terminal_rows)
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
         _record_progress_activity_locked()
@@ -393,6 +469,8 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
     _write(''.join(sequences))
     _flush_stream()
     _last_drawn_progress_count = len(lines)
+    _last_rendered_terminal_size = (terminal_columns, terminal_rows)
+    _last_rendered_progress_lines = list(lines)
     _cursor_positioned_above_stack = True
     _set_cursor_visibility_locked(False)
     _record_progress_activity_locked()
@@ -806,7 +884,7 @@ class LogBar(logging.Logger):
         return " ".join(part for part in parts if part)
 
     def _process(self, level: Union[LEVEL, int, str], msg, *args, **kwargs):
-        global last_rendered_length
+        global last_rendered_length, _cursor_positioned_above_stack
 
         normalized_level = self._normalize_level(level)
         if not self.isEnabledFor(normalized_level):
@@ -822,10 +900,11 @@ class LogBar(logging.Logger):
             with _STATE_LOCK:
                 previous_render_length = last_rendered_length
 
-            line_length = level_width + 1 + len(str_msg)
+            message_width = visible_length(str_msg)
+            line_length = level_width + 1 + message_width
 
             if columns > 0:
-                padding_needed = max(0, columns - level_width - 2 - len(str_msg))
+                padding_needed = max(0, columns - level_width - 2 - message_width)
                 rendered_message = f"{str_msg}{' ' * padding_needed}"
                 printable_length = columns
             else:
@@ -833,7 +912,9 @@ class LogBar(logging.Logger):
                 excess_padding = max(0, previous_render_length - printable_length)
                 rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
 
-            _clear_progress_stack_locked(for_log_output=True)
+            stacked_log_insert = _prepare_progress_stack_for_log_locked()
+            if not stacked_log_insert:
+                _clear_progress_stack_locked(for_log_output=True)
 
             reset = COLORS["RESET"]
             color = COLORS.get(level_label, reset)
@@ -843,5 +924,10 @@ class LogBar(logging.Logger):
 
             with _STATE_LOCK:
                 last_rendered_length = printable_length
+
+            if stacked_log_insert:
+                _write('\033[1A\r')
+                _flush_stream()
+                _cursor_positioned_above_stack = True
 
             _render_progress_stack_locked()
