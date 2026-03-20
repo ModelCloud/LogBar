@@ -35,7 +35,7 @@ from .drawing import (
     TITLE_BASE_COLOR,
     TITLE_HIGHLIGHT_COLOR,
     CellBarRenderer,
-    iter_ansi_tokens,
+    iter_display_atoms,
     strip_ansi,
     truncate_ansi,
     visible_length,
@@ -943,18 +943,23 @@ class ProgressBar:
 
         parts = [TITLE_BASE_COLOR]
         visible_idx = 0
-        for is_ansi, token in iter_ansi_tokens(text):
+        for is_ansi, token, width in iter_display_atoms(text):
             if is_ansi:
                 parts.append(token)
                 continue
-            if highlight_idx is not None and visible_idx == highlight_idx:
+            highlight_active = (
+                highlight_idx is not None
+                and width > 0
+                and visible_idx <= highlight_idx < (visible_idx + width)
+            )
+            if highlight_active:
                 parts.append(TITLE_HIGHLIGHT_COLOR)
                 parts.append(token)
                 parts.append(ANSI_BOLD_RESET)
                 parts.append(TITLE_BASE_COLOR)
             else:
                 parts.append(token)
-            visible_idx += 1
+            visible_idx += width
 
         parts.append(ANSI_RESET)
         return ''.join(parts)
@@ -965,10 +970,15 @@ class ProgressBar:
     def _should_animate_title(self) -> bool:
         if not _env_animation_enabled():
             return False
-        isatty = getattr(sys.stdout, "isatty", None)
-        if not callable(isatty):
+        try:
+            state = render_backend_state(
+                stream=sys.stdout,
+                size_provider=terminal_size,
+                notebook=_running_in_notebook_environment(),
+            )
+        except Exception:
             return False
-        return bool(isatty())
+        return state.supports_cursor
 
     def __bool__(self):
         if self.iterable is None:

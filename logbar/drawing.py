@@ -17,6 +17,7 @@ ANSI_BOLD_RESET = "\033[22m"
 TITLE_BASE_COLOR = "\033[38;5;250m"
 TITLE_HIGHLIGHT_COLOR = "\033[1m\033[38;5;15m"
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
+TAB_STOP = 8
 
 BLOCK_PARTIAL_CHARS = ("", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█")
 SUBCELL_RESOLUTION = len(BLOCK_PARTIAL_CHARS) - 1
@@ -27,6 +28,7 @@ _EMOJI_PRESENTATION_VARIATION = "\ufe0f"
 _KEYCAP_COMBINING = "\u20e3"
 
 
+@lru_cache(maxsize=8192)
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
 
@@ -152,9 +154,6 @@ def _cluster_cell_width(cluster: str) -> int:
     if not cluster:
         return 0
 
-    if cluster == "\t":
-        return 1
-
     if any(ch in {"\r", "\n"} for ch in cluster):
         return 0
 
@@ -185,6 +184,7 @@ def _iter_plain_clusters(text: str):
 
 
 def iter_display_atoms(text: str):
+    column = 0
     i = 0
     while i < len(text):
         if text[i] == "\x1b":
@@ -195,14 +195,30 @@ def iter_display_atoms(text: str):
                 continue
 
         cluster, i = _consume_plain_cluster(text, i)
-        yield False, cluster, _cluster_cell_width(cluster)
+        if cluster == "\t":
+            remainder = column % TAB_STOP
+            width = TAB_STOP if remainder == 0 else TAB_STOP - remainder
+        else:
+            width = _cluster_cell_width(cluster)
+
+        yield False, cluster, width
+
+        if cluster in {"\r", "\n"}:
+            column = 0
+        else:
+            column += width
 
 
+@lru_cache(maxsize=8192)
 def visible_length(text: str) -> int:
     if not text:
         return 0
-    cleaned = strip_ansi(text).replace("\r", "").replace("\n", "")
-    return sum(_cluster_cell_width(cluster) for cluster in _iter_plain_clusters(cleaned))
+
+    printable = 0
+    for is_ansi, _token, width in iter_display_atoms(text):
+        if not is_ansi:
+            printable += width
+    return printable
 
 
 def iter_ansi_tokens(text: str):
@@ -218,6 +234,7 @@ def iter_ansi_tokens(text: str):
         i += 1
 
 
+@lru_cache(maxsize=8192)
 def truncate_ansi(text: str, limit: int) -> str:
     if limit <= 0:
         return ANSI_RESET

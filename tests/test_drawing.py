@@ -45,3 +45,11 @@ class TestDrawing(unittest.TestCase):
 
         self.assertEqual(visible_length(text), 4)
         self.assertEqual(strip_ansi(truncate_ansi(text, 3)), "A👨‍👩‍👧‍👦")
+
+    def test_ansi_helpers_expand_tabs_to_terminal_stops(self):
+        text = "A\tB"
+
+        self.assertEqual(visible_length(text), 9)
+        self.assertEqual(strip_ansi(truncate_ansi(text, 7)), "A")
+        self.assertEqual(strip_ansi(truncate_ansi(text, 8)), "A\t")
+        self.assertEqual(strip_ansi(truncate_ansi(text, 9)), "A\tB")

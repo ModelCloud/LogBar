@@ -4,6 +4,7 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import builtins
+import html
 import logging
 import os
 import sys
@@ -15,7 +16,7 @@ from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 from .terminal import RenderBackendState, render_backend_state, terminal_size
 from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
-from .drawing import visible_length
+from .drawing import strip_ansi, visible_length
 
 # global static/shared logger instance
 logger = None
@@ -119,7 +120,15 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
         return False
 
     text = '\n'.join(lines) if lines else ''
-    payload = {'text/plain': text}
+    payload = {
+        'text/plain': text,
+        'text/html': (
+            '<pre style="margin:0; white-space:pre; '
+            'font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">'
+            f'{html.escape(strip_ansi(text))}'
+            '</pre>'
+        ),
+    }
 
     try:
         handle = _notebook_display_handle
@@ -133,7 +142,16 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
 
         if not lines:
             try:
-                handle.update({'text/plain': ''}, raw=True)
+                handle.update(
+                    {
+                        'text/plain': '',
+                        'text/html': (
+                            '<pre style="margin:0; white-space:pre; '
+                            'font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"></pre>'
+                        ),
+                    },
+                    raw=True,
+                )
             except Exception:
                 pass
             try:
@@ -156,7 +174,7 @@ def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
     if not lines:
         if _notebook_plain_last_line is not None:
             _write('\r')
-            _write(' ' * len(_notebook_plain_last_line))
+            _write(' ' * visible_length(_notebook_plain_last_line))
             _write('\r')
             _flush_stream()
         _notebook_plain_last_line = None

@@ -169,6 +169,23 @@ class TestProgress(unittest.TestCase):
         with redirect_stdout(StringIO()):
             pb.close()
 
+    def test_title_animation_keeps_zwj_clusters_atomic(self):
+        pb = log.pb(1).manual()
+        title = "A👨‍👩‍👧‍👦B"
+        pb.title(title)
+        pb._title_animation_period = 0.1
+        pb._title_animation_start = 100.0
+
+        with patch('logbar.progress.time.time', return_value=100.2):
+            animated = pb._animated_text(title)
+
+        match = re.search(re.escape(TITLE_HIGHLIGHT_COLOR) + r"(.*?)" + re.escape(ANSI_BOLD_RESET), animated)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "👨‍👩‍👧‍👦")
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
     def test_title_animation_respects_logbar_animation_env(self):
         script = (
             "from types import SimpleNamespace\n"
@@ -424,14 +441,14 @@ class TestProgress(unittest.TestCase):
 
         class StubHandle:
             def update(self, payload, raw=False):
-                updates.append(('update', payload['text/plain'], raw))
+                updates.append(('update', payload, raw))
                 return self
 
             def close(self):
                 updates.append(('close', '', None))
 
         def stub_display(payload, raw=False, display_id=False):
-            updates.append(('display', payload['text/plain'], raw))
+            updates.append(('display', payload, raw))
             self.assertTrue(raw)
             self.assertTrue(display_id)
             return StubHandle()
@@ -448,7 +465,11 @@ class TestProgress(unittest.TestCase):
         self.assertGreaterEqual(len(updates), 2)
         initial = updates[0][1]
         repeat = updates[-1][1]
-        self.assertIn('NB', initial)
+        self.assertIn('text/plain', initial)
+        self.assertIn('text/html', initial)
+        self.assertIn('NB', initial['text/plain'])
+        self.assertIn('NB', initial['text/html'])
+        self.assertIn('<pre', initial['text/html'])
         self.assertEqual(initial, repeat)
 
         with redirect_stdout(StringIO()):
