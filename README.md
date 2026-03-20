@@ -38,15 +38,45 @@ pip install logbar
 
 LogBar works out-of-the-box with CPython 3.8+ on Linux, macOS, and Windows terminals.
 
-## Rendering Engine
+## Renderer Design
 
-LogBar intentionally uses an ANSI stream renderer with a shared Unicode cell-canvas instead of forcing a `curses`/`ncurses` backend:
+LogBar keeps progress bars, spinners, tables, and normal log lines readable in the same terminal session. Compared with traditional loggers, it lets long-running CLI programs show live status without flooding the screen with repeated status lines or breaking the flow of regular logs.
 
-- `curses` targets character-cell terminals, not pixel framebuffers, so it does not unlock true pixel-level drawing.
-- CPython ships `curses` on Unix-like systems, but not on Windows, which would require an extra compatibility package.
-- LogBar interleaves normal logging with live progress bars, so preserving plain stdout semantics is a better fit than switching the whole process into fullscreen terminal-app mode.
+Main rendering APIs:
 
-The internal drawing engine now rasterizes progress bars at sub-cell resolution using Unicode block elements, which gives smoother fills without adding runtime dependencies.
+- `log.pb(...)` for live progress bars
+- `log.spinner(...)` for work with no fixed total
+- `log.columns(...)` for aligned table output
+
+Examples:
+
+```py
+from logbar import LogBar
+
+log = LogBar.shared()
+
+for _ in log.pb(range(5)).title("下载 📦").subtitle("phase 1"):
+    pass
+```
+
+```py
+jobs = ["scan", "parse", "index", "flush"]
+pb = log.pb(jobs, output_interval=1).title("Indexing").manual()
+for job in pb:
+    log.info("processing %s", job)
+    pb.subtitle(job).draw()
+```
+
+```py
+cols = log.columns(
+    {"label": "task", "width": "fit"},
+    {"label": "status", "width": "fit"},
+    {"label": "detail", "width": "50%"},
+)
+
+cols.info.header()
+cols.info("render", "active", "width and alignment stay terminal-aware")
+```
 
 # Quick Start
 
