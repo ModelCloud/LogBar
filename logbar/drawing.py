@@ -228,6 +228,11 @@ def iter_display_atoms(text: str):
             column += width
 
 
+@lru_cache(maxsize=2048)
+def cached_display_atoms(text: str) -> tuple[tuple[bool, str, int], ...]:
+    return tuple(iter_display_atoms(text))
+
+
 @lru_cache(maxsize=8192)
 def visible_length(text: str) -> int:
     if not text:

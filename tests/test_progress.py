@@ -543,6 +543,24 @@ class TestProgress(unittest.TestCase):
         with redirect_stdout(StringIO()):
             pb.close()
 
+    def test_progress_draw_plain_stream_strips_ansi_title_and_subtitle(self):
+        pb = log.pb(10).title("\033[31mPB\033[0m").subtitle("\033[32mSUB\033[0m").manual()
+        pb.current_iter_step = 5
+
+        with patch.dict('logbar.terminal.os.environ', {}, clear=True), \
+             patch('logbar.progress.terminal_size', return_value=(48, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        raw = buffer.getvalue()
+        self.assertIn('PB', raw)
+        self.assertIn('SUB', raw)
+        self.assertNotIn('\033[', raw)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
     def test_progress_bar_attach_detach_random_session(self):
         rng = random.Random(1337)
         duration = 10.0

@@ -35,7 +35,7 @@ from .drawing import (
     TITLE_BASE_COLOR,
     TITLE_HIGHLIGHT_COLOR,
     CellBarRenderer,
-    iter_display_atoms,
+    cached_display_atoms,
     strip_ansi,
     truncate_ansi,
     visible_length,
@@ -386,7 +386,13 @@ class ProgressBar:
         self._render_mode = RenderMode.AUTO
 
         self._title = ""
+        self._title_plain = ""
+        self._title_width = 0
+        self._title_padding = ""
         self._subtitle = ""
+        self._subtitle_plain = ""
+        self._subtitle_width = 0
+        self._subtitle_padding = ""
         self._style = self.default_style()
         self._style_name = self._style.name
         self.closed = False # active state
@@ -418,6 +424,18 @@ class ProgressBar:
         self._last_rendered_line = ""
         self._logbar_dirty_tracked = True
         self._next_title_refresh_at = 0.0
+
+    def _update_title_cache(self, title: str) -> None:
+        self._title = title
+        self._title_plain = strip_ansi(title)
+        self._title_width = visible_length(title)
+        self._title_padding = " " * max(0, self.max_title_len - self._title_width)
+
+    def _update_subtitle_cache(self, subtitle: str) -> None:
+        self._subtitle = subtitle
+        self._subtitle_plain = strip_ansi(subtitle)
+        self._subtitle_width = visible_length(subtitle)
+        self._subtitle_padding = " " * max(0, self.max_subtitle_len - self._subtitle_width)
 
     def _mark_dirty(self):
         if self._attached:
@@ -542,7 +560,7 @@ class ProgressBar:
             self.max_title_len = title_len
 
         previous_title = self._title
-        self._title = title
+        self._update_title_cache(title)
 
         # Only reset the animation clock when transitioning from no title to
         # an initial title. For dynamic titles (updated every frame) we want
@@ -561,7 +579,7 @@ class ProgressBar:
         if subtitle_len > self.max_subtitle_len:
             self.max_subtitle_len = subtitle_len
 
-        self._subtitle = subtitle
+        self._update_subtitle_cache(subtitle)
         return self._mark_dirty()
 
     # set render mode
@@ -850,24 +868,14 @@ class ProgressBar:
             left_current = self.step() - self.ui_show_left_steps_offset
             left_total = total_steps - self.ui_show_left_steps_offset
             self.ui_show_left_steps_text = f"[{left_current} of {left_total}] "
-            self.ui_show_left_steps_text_max_len = visible_length(self.ui_show_left_steps_text)
+            self.ui_show_left_steps_text_max_len = len(self.ui_show_left_steps_text)
             pre_bar_size += self.ui_show_left_steps_text_max_len
 
-        padding = ""
-
-        if self._title:
-            title_len = visible_length(self._title)
-            if title_len < self.max_title_len:
-                padding += " " * (self.max_title_len - title_len)
-
-        if self._subtitle:
-            subtitle_len = visible_length(self._subtitle)
-            if subtitle_len < self.max_subtitle_len:
-                padding += " " * (self.max_subtitle_len - subtitle_len)
+        padding = self._title_padding + self._subtitle_padding
 
         available_columns = columns if columns is not None and columns > 0 else 0
 
-        log_text_width = visible_length(log_text)
+        log_text_width = len(log_text)
         bar_length = max(0, available_columns - pre_bar_size - log_text_width - 2) if available_columns else 0
         self.bar_length = bar_length
 
@@ -927,14 +935,14 @@ class ProgressBar:
         if self._title:
             if animate_title:
                 animated_title = self._animated_text(self._title)
-                append_segment(self._title, animated_title, strip_ansi(self._title))
+                append_segment(self._title, animated_title, self._title_plain)
             else:
-                append_segment(self._title, plain=strip_ansi(self._title))
+                append_segment(self._title, plain=self._title_plain)
             append_segment(" ")
 
         if self._subtitle:
             subtitle_text = f"{self._subtitle} "
-            append_segment(subtitle_text, plain=strip_ansi(subtitle_text))
+            append_segment(subtitle_text, plain=f"{self._subtitle_plain} ")
 
         if pre_bar_padding:
             append_segment(pre_bar_padding)
@@ -991,7 +999,7 @@ class ProgressBar:
 
         parts = [TITLE_BASE_COLOR]
         visible_idx = 0
-        for is_ansi, token, width in iter_display_atoms(text):
+        for is_ansi, token, width in cached_display_atoms(text):
             if is_ansi:
                 parts.append(token)
                 continue
@@ -1216,21 +1224,11 @@ class RollingProgressBar(ProgressBar):
         if self._subtitle:
             pre_bar_size += self.max_subtitle_len + 1
 
-        padding = ""
-
-        if self._title:
-            title_len = visible_length(self._title)
-            if title_len < self.max_title_len:
-                padding += " " * (self.max_title_len - title_len)
-
-        if self._subtitle:
-            subtitle_len = visible_length(self._subtitle)
-            if subtitle_len < self.max_subtitle_len:
-                padding += " " * (self.max_subtitle_len - subtitle_len)
+        padding = self._title_padding + self._subtitle_padding
 
         available_columns = columns if columns is not None and columns > 0 else 0
 
-        log_text_width = visible_length(log_text)
+        log_text_width = len(log_text)
         bar_length = max(0, available_columns - pre_bar_size - log_text_width - 2) if available_columns else 0
         self.bar_length = bar_length
 
