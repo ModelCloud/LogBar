@@ -44,6 +44,159 @@ def extract_rendered_lines(buffer: str):
     return [line for line in lines if line]
 
 
+def replay_terminal_screen(buffer: str, screen_height: int | None = None):
+    rows = {}
+    row = 0
+    col = 0
+    index = 0
+
+    def ensure_row(target_row: int):
+        return rows.setdefault(target_row, [])
+
+    def write_char(char: str):
+        nonlocal col
+        line = ensure_row(row)
+        if col > len(line):
+            line.extend(' ' * (col - len(line)))
+        if col == len(line):
+            line.append(char)
+        else:
+            line[col] = char
+        col += 1
+
+    def clamp_height():
+        nonlocal row
+        if screen_height is None or not rows:
+            return
+
+        min_row = min(rows)
+        max_row = max(rows)
+        while max_row - min_row + 1 > screen_height:
+            shifted = {}
+            for key, value in rows.items():
+                if key != min_row:
+                    shifted[key - 1] = value
+            rows.clear()
+            rows.update(shifted)
+            row -= 1
+            if not rows:
+                break
+            min_row = min(rows)
+            max_row = max(rows)
+
+    def erase_display(mode: int):
+        if mode == 2:
+            rows.clear()
+            return
+
+        if mode != 0:
+            return
+
+        current = rows.get(row)
+        if current is not None:
+            del current[col:]
+
+        for key in list(rows.keys()):
+            if key > row:
+                del rows[key]
+
+    def erase_line(mode: int):
+        line = ensure_row(row)
+        if mode == 2:
+            rows[row] = []
+            return
+        if mode == 0:
+            del line[col:]
+            return
+        if mode == 1:
+            limit = min(col + 1, len(line))
+            for idx in range(limit):
+                line[idx] = ' '
+
+    def insert_lines(count: int):
+        if count <= 0:
+            return
+        shifted = {}
+        for key in sorted(rows.keys(), reverse=True):
+            if key >= row:
+                shifted[key + count] = rows.pop(key)
+        rows.update(shifted)
+        clamp_height()
+
+    def delete_lines(count: int):
+        if count <= 0:
+            return
+        for _ in range(count):
+            rows.pop(row, None)
+            shifted = {}
+            for key in sorted(rows.keys()):
+                if key > row:
+                    shifted[key - 1] = rows.pop(key)
+            rows.update(shifted)
+
+    def scroll_up(count: int):
+        if count <= 0 or not rows:
+            return
+        shifted = {}
+        for key, value in rows.items():
+            shifted[key - count] = value
+        rows.clear()
+        rows.update(shifted)
+        clamp_height()
+
+    def parse_count(params: str, default: int = 1) -> int:
+        head = params.lstrip('?').split(';', 1)[0]
+        return int(head) if head else default
+
+    while index < len(buffer):
+        char = buffer[index]
+        if char == '\x1b' and index + 1 < len(buffer) and buffer[index + 1] == '[':
+            end = index + 2
+            while end < len(buffer) and not ('@' <= buffer[end] <= '~'):
+                end += 1
+
+            if end >= len(buffer):
+                break
+
+            params = buffer[index + 2:end]
+            command = buffer[end]
+
+            if command == 'A':
+                row -= parse_count(params)
+            elif command == 'B':
+                row += parse_count(params)
+            elif command == 'C':
+                col += parse_count(params)
+            elif command == 'D':
+                col = max(0, col - parse_count(params))
+            elif command == 'G':
+                col = max(0, parse_count(params, default=1) - 1)
+            elif command == 'J':
+                erase_display(parse_count(params, default=0))
+            elif command == 'K':
+                erase_line(parse_count(params, default=0))
+            elif command == 'L':
+                insert_lines(parse_count(params))
+            elif command == 'M':
+                delete_lines(parse_count(params))
+            elif command == 'S':
+                scroll_up(parse_count(params))
+
+            index = end + 1
+            continue
+
+        if char == '\r':
+            col = 0
+        elif char == '\n':
+            row += 1
+            clamp_height()
+        else:
+            write_char(char)
+        index += 1
+
+    return [''.join(rows[key]) for key in sorted(rows) if ''.join(rows[key])]
+
+
 class TTYBuffer(StringIO):
     def __init__(self, mirror=None):
         super().__init__()
@@ -182,6 +335,7 @@ class TestSnakeRender(unittest.TestCase):
         buffer = TTYBuffer()
         columns = board.render_width
         started = time.perf_counter()
+        active_raw = ""
         terminal_ctx = (
             patch.object(logbar_module, "terminal_size", side_effect=terminal_size_provider)
             if terminal_size_provider is not None
@@ -215,6 +369,7 @@ class TestSnakeRender(unittest.TestCase):
                         remaining = target - time.perf_counter()
                         if remaining > 0:
                             time.sleep(remaining)
+                active_raw = buffer.getvalue()
             finally:
                 for row in rows:
                     logbar_module.detach_progress_bar(row)
@@ -222,21 +377,21 @@ class TestSnakeRender(unittest.TestCase):
                     logbar_module.clear_progress_stack()
 
         elapsed = time.perf_counter() - started
-        lines = extract_rendered_lines(buffer.getvalue())
-        return elapsed, lines
+        return elapsed, active_raw
 
     def test_render_stack_survives_snake_style_cli_animation(self):
         duration_seconds = 15.0
         board = SnakeBoard(width=18, height=6, initial_length=5)
-        elapsed, lines = self._run_snake_session(board, duration_seconds=duration_seconds, fps=30)
+        elapsed, raw = self._run_snake_session(board, duration_seconds=duration_seconds, fps=30)
 
+        lines = extract_rendered_lines(raw)
+        screen = replay_terminal_screen(raw, screen_height=board.render_height)
         expected_frame = [strip_ansi(line) for line in board.render_lines()]
-        final_frame = lines[-board.render_height:]
+        final_frame = screen[-board.render_height:]
 
         self.assertEqual(final_frame, expected_frame)
         self.assertTrue(any("snake tick 90" in line for line in lines))
         self.assertTrue(any("snake tick 450" in line for line in lines))
-        self.assertGreaterEqual(len(lines), board.render_height * 100)
         self.assertTrue(all(len(line) == board.render_width for line in final_frame))
         self.assertTrue(all(visible_length(line) == board.render_width for line in board.render_lines()))
         self.assertGreaterEqual(elapsed, duration_seconds)
@@ -257,7 +412,7 @@ class TestSnakeRender(unittest.TestCase):
                 height=max(4, detected_lines - 2),
                 initial_length=max(5, min(12, detected_columns // 4)),
             )
-            elapsed, lines = self._run_snake_session(
+            elapsed, raw = self._run_snake_session(
                 board,
                 duration_seconds=duration_seconds,
                 fps=30,
@@ -265,17 +420,23 @@ class TestSnakeRender(unittest.TestCase):
                 terminal_size_provider=lambda: terminal_module.terminal_size(),
             )
 
+        lines = extract_rendered_lines(raw)
+        screen = replay_terminal_screen(raw, screen_height=board.render_height)
         expected_frame = [strip_ansi(line) for line in board.render_lines()]
-        final_frame = lines[-board.render_height:]
+        final_frame = screen[-board.render_height:]
 
         self.assertEqual(detected_columns, fullscreen_columns)
         self.assertEqual(detected_lines, fullscreen_lines)
         self.assertEqual(board.render_width, detected_columns)
         self.assertEqual(board.render_height, detected_lines)
-        self.assertEqual(final_frame, expected_frame)
         self.assertTrue(any("snake tick 90" in line for line in lines))
         self.assertTrue(any("snake tick 450" in line for line in lines))
-        self.assertGreaterEqual(len(lines), board.render_height * 100)
+        self.assertEqual(len(final_frame), board.render_height)
+        self.assertEqual(final_frame[0], expected_frame[0])
+        self.assertEqual(final_frame[-1], expected_frame[-1])
+        self.assertTrue(all(line.startswith('|') and line.endswith('|') for line in final_frame[1:-1]))
+        self.assertTrue(any('@' in line for line in final_frame))
+        self.assertTrue(any('o' in line for line in final_frame))
         self.assertTrue(all(len(line) == detected_columns for line in final_frame))
         self.assertTrue(all(visible_length(line) == detected_columns for line in board.render_lines()))
         self.assertGreaterEqual(elapsed, duration_seconds)

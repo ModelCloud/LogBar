@@ -189,6 +189,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
 _attached_progress_bars = []  # type: list["ProgressBar"]
 _last_drawn_progress_count = 0
 _last_rendered_terminal_size: Optional[tuple[int, int]] = None
+_last_rendered_progress_lines: list[str] = []
 _cursor_positioned_above_stack = False
 _cursor_hidden = False
 _refresh_thread: Optional[threading.Thread] = None
@@ -234,7 +235,7 @@ def _set_cursor_visibility_locked(visible: bool) -> None:
 
 
 def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bool = False) -> None:
-    global _last_drawn_progress_count, _last_rendered_terminal_size, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
 
     count = _last_drawn_progress_count
     supports_cursor = _stdout_supports_cursor_movement()
@@ -244,12 +245,15 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bo
             _notebook_render_plain_stdout([])
         _last_drawn_progress_count = 0
         _last_rendered_terminal_size = None
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         if show_cursor:
             _set_cursor_visibility_locked(True)
         return
 
     if count == 0:
+        _last_rendered_terminal_size = None
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         if show_cursor:
             _set_cursor_visibility_locked(True)
@@ -280,6 +284,7 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bo
 
     _last_drawn_progress_count = 0
     _last_rendered_terminal_size = None
+    _last_rendered_progress_lines = []
     _cursor_positioned_above_stack = False
     if show_cursor:
         _set_cursor_visibility_locked(True)
@@ -322,7 +327,7 @@ def _active_progress_bars() -> list["ProgressBar"]:
 
 
 def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
-    global _last_drawn_progress_count, _last_rendered_terminal_size, _cursor_positioned_above_stack
+    global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
 
     if columns_hint is not None:
         columns = columns_hint
@@ -378,6 +383,7 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
             _flush_stream()
         _last_drawn_progress_count = 0
         _last_rendered_terminal_size = None
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
         _record_progress_activity_locked()
@@ -389,7 +395,43 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
         lines = lines[-terminal_rows:]
 
     previous_count = _last_drawn_progress_count
+    previous_lines = list(_last_rendered_progress_lines)
+    size_changed = _last_rendered_terminal_size != (terminal_columns, terminal_rows)
     sequences: list[str] = []
+
+    can_diff_redraw = (
+        previous_count > 0
+        and _cursor_positioned_above_stack
+        and not size_changed
+        and len(previous_lines) == len(lines)
+    )
+
+    if lines and can_diff_redraw:
+        changed_indexes = [
+            index for index, (old_line, new_line) in enumerate(zip(previous_lines, lines))
+            if old_line != new_line
+        ]
+
+        if changed_indexes:
+            for index in changed_indexes:
+                offset = index + 1
+                sequences.append(f'\033[{offset}B')
+                sequences.append('\r')
+                sequences.append('\033[2K')
+                sequences.append(lines[index])
+                sequences.append('\r')
+                sequences.append(f'\033[{offset}A')
+
+            _write(''.join(sequences))
+            _flush_stream()
+
+        _last_drawn_progress_count = len(lines)
+        _last_rendered_terminal_size = (terminal_columns, terminal_rows)
+        _last_rendered_progress_lines = list(lines)
+        _cursor_positioned_above_stack = True
+        _set_cursor_visibility_locked(False)
+        _record_progress_activity_locked()
+        return
 
     if previous_count:
         if _cursor_positioned_above_stack:
@@ -409,6 +451,7 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
         _flush_stream()
         _last_drawn_progress_count = 0
         _last_rendered_terminal_size = (terminal_columns, terminal_rows)
+        _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
         _record_progress_activity_locked()
@@ -427,6 +470,7 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
     _flush_stream()
     _last_drawn_progress_count = len(lines)
     _last_rendered_terminal_size = (terminal_columns, terminal_rows)
+    _last_rendered_progress_lines = list(lines)
     _cursor_positioned_above_stack = True
     _set_cursor_visibility_locked(False)
     _record_progress_activity_locked()
