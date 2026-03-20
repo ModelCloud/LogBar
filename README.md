@@ -21,6 +21,7 @@
 - Shared singleton logger with per-level colorized output.
 - `once` helpers prevent duplicate log spam automatically.
 - Stackable progress bars that stay anchored while your logs flow freely.
+- Sub-cell Unicode bar rasterization for smoother, more accurate terminal fills.
 - Built-in styling for progress bar fills, colors, gradients, and head glyphs.
 - Animated progress titles with a subtle sweeping highlight.
   Set `LOGBAR_ANIMATION=0` to disable the highlight animation.
@@ -36,6 +37,16 @@ pip install logbar
 ```
 
 LogBar works out-of-the-box with CPython 3.8+ on Linux, macOS, and Windows terminals.
+
+## Rendering Engine
+
+LogBar intentionally uses an ANSI stream renderer with a shared Unicode cell-canvas instead of forcing a `curses`/`ncurses` backend:
+
+- `curses` targets character-cell terminals, not pixel framebuffers, so it does not unlock true pixel-level drawing.
+- CPython ships `curses` on Unix-like systems, but not on Windows, which would require an extra compatibility package.
+- LogBar interleaves normal logging with live progress bars, so preserving plain stdout semantics is a better fit than switching the whole process into fullscreen terminal-app mode.
+
+The internal drawing engine now rasterizes progress bars at sub-cell resolution using Unicode block elements, which gives smoother fills without adding runtime dependencies.
 
 # Quick Start
 
