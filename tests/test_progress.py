@@ -70,6 +70,33 @@ SAMPLES = generate_expanding_str_a_to_z()
 REVERSED_SAMPLES = reversed(SAMPLES)
 
 class TestProgress(unittest.TestCase):
+    def setUp(self):
+        self._saved_env = {
+            "LOGBAR_ANIMATION": os.environ.get("LOGBAR_ANIMATION"),
+            "LOGBAR_PROGRESS_OUTPUT_INTERVAL": os.environ.get("LOGBAR_PROGRESS_OUTPUT_INTERVAL"),
+        }
+
+        for key in self._saved_env:
+            os.environ.pop(key, None)
+
+        self._clear_progress_env_caches()
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+        self._clear_progress_env_caches()
+
+    @staticmethod
+    def _clear_progress_env_caches():
+        for helper_name in ("_env_animation_enabled", "_env_progress_output_interval"):
+            helper = getattr(progress_module, helper_name, None)
+            cache_clear = getattr(helper, "cache_clear", None)
+            if callable(cache_clear):
+                cache_clear()
 
     def test_title_fixed_subtitle_dynamic(self):
         pb = log.pb(SAMPLES).title("TITLE:").manual()

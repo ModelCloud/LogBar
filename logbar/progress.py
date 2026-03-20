@@ -714,7 +714,7 @@ class ProgressBar:
 
         return self.step()
 
-    def _should_render(self, force: bool = False) -> bool:
+    def _should_render(self, force: bool = False, allow_repeat: bool = False) -> bool:
         if force:
             return True
 
@@ -725,10 +725,19 @@ class ProgressBar:
         if last_output_step is None:
             return True
 
-        return (self._render_position() - last_output_step) >= self._output_interval
+        current_step = self._render_position()
+        if allow_repeat and current_step <= last_output_step:
+            return True
 
-    def _resolve_rendered_line(self, columns: int, force: bool = False) -> Optional[str]:
-        if not self._should_render(force=force):
+        return (current_step - last_output_step) >= self._output_interval
+
+    def _resolve_rendered_line(
+        self,
+        columns: int,
+        force: bool = False,
+        allow_repeat: bool = False,
+    ) -> Optional[str]:
+        if not self._should_render(force=force, allow_repeat=allow_repeat):
             return None
 
         rendered_line = self._render_snapshot(columns)
@@ -741,7 +750,7 @@ class ProgressBar:
         # throttle when progress is advancing quickly.
         _record_progress_activity()
         columns, _ = terminal_size()
-        rendered_line = self._resolve_rendered_line(columns, force=force)
+        rendered_line = self._resolve_rendered_line(columns, force=force, allow_repeat=True)
         if rendered_line is None:
             return
 
