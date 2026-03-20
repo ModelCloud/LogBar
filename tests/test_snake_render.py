@@ -245,8 +245,9 @@ class TestSnakeRender(unittest.TestCase):
         from logbar import terminal as terminal_module
 
         duration_seconds = 15.0
-        fullscreen_columns = 72
-        fullscreen_lines = 18
+        actual_size = os.terminal_size(terminal_module.terminal_size())
+        fullscreen_columns = max(20, actual_size.columns)
+        fullscreen_lines = max(8, actual_size.lines)
 
         with patch.dict('logbar.terminal.os.environ', {}, clear=True), \
              patch('logbar.terminal.shutil.get_terminal_size', return_value=os.terminal_size((fullscreen_columns, fullscreen_lines))):

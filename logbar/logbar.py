@@ -281,6 +281,27 @@ def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bo
         _set_cursor_visibility_locked(True)
 
 
+def _prepare_progress_stack_for_log_locked() -> bool:
+    """Reserve one row above the active stack for a log line without scrolling it."""
+
+    count = _last_drawn_progress_count
+    if count == 0:
+        return False
+
+    if not _stdout_supports_cursor_movement():
+        return False
+
+    if not _cursor_positioned_above_stack:
+        return False
+
+    # Insert a blank row at the top of the current stack so the log line's
+    # trailing newline lands inside the stack footprint instead of pushing the
+    # whole render window down by a row.
+    _write('\033[1B\r\033[1L\033[1A\r')
+    _flush_stream()
+    return True
+
+
 def clear_progress_stack(lock_held: bool = False) -> None:
     """Erase any rendered progress bars from the terminal."""
 
@@ -806,7 +827,7 @@ class LogBar(logging.Logger):
         return " ".join(part for part in parts if part)
 
     def _process(self, level: Union[LEVEL, int, str], msg, *args, **kwargs):
-        global last_rendered_length
+        global last_rendered_length, _cursor_positioned_above_stack
 
         normalized_level = self._normalize_level(level)
         if not self.isEnabledFor(normalized_level):
@@ -833,7 +854,9 @@ class LogBar(logging.Logger):
                 excess_padding = max(0, previous_render_length - printable_length)
                 rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
 
-            _clear_progress_stack_locked(for_log_output=True)
+            stacked_log_insert = _prepare_progress_stack_for_log_locked()
+            if not stacked_log_insert:
+                _clear_progress_stack_locked(for_log_output=True)
 
             reset = COLORS["RESET"]
             color = COLORS.get(level_label, reset)
@@ -843,5 +866,10 @@ class LogBar(logging.Logger):
 
             with _STATE_LOCK:
                 last_rendered_length = printable_length
+
+            if stacked_log_insert:
+                _write('\033[1A\r')
+                _flush_stream()
+                _cursor_positioned_above_stack = True
 
             _render_progress_stack_locked()
