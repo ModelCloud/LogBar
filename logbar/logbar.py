@@ -12,7 +12,7 @@ import time
 from enum import Enum
 from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
-from .terminal import terminal_size
+from .terminal import RenderBackendState, render_backend_state, terminal_size
 from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
 from .drawing import visible_length
@@ -50,6 +50,23 @@ _notebook_display_handle = None
 _notebook_plain_last_line: Optional[str] = None
 
 
+def _current_render_backend_state(columns_hint: Optional[int] = None) -> RenderBackendState:
+    notebook = _running_in_notebook_environment()
+
+    if columns_hint is not None:
+        def _size_provider():
+            _, lines = terminal_size()
+            return (columns_hint, lines)
+    else:
+        _size_provider = terminal_size
+
+    return render_backend_state(
+        stream=sys.stdout,
+        size_provider=_size_provider,
+        notebook=notebook,
+    )
+
+
 def _running_in_notebook_environment() -> bool:
     """Best-effort detection for Jupyter-style REMOTE frontends."""
 
@@ -81,25 +98,11 @@ def _running_in_notebook_environment() -> bool:
 
 
 def _stdout_supports_cursor_movement() -> bool:
-    stdout = sys.stdout
-    isatty = getattr(stdout, "isatty", None)
-
-    if callable(isatty):
-        try:
-            if isatty():
-                return True
-        except Exception:  # pragma: no cover - keep rendering alive on odd stdouts
-            return False
-
-    if os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "").strip():
-        return True
-
-    # When in a notebook frontend, cursor movement is not reliably supported.
-    if _running_in_notebook_environment():
+    try:
+        state = _current_render_backend_state()
+    except Exception:  # pragma: no cover - keep rendering alive on odd stdouts
         return False
-
-    # Default to disabling cursor sequences when stdout is not a TTY.
-    return False
+    return state.supports_cursor
 
 
 def _notebook_render_stack(lines: Sequence[str]) -> bool:
@@ -163,7 +166,7 @@ def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
 
     if len(lines) == 1:
         previous = _notebook_plain_last_line or ''
-        pad = len(previous) - len(joined)
+        pad = visible_length(previous) - visible_length(joined)
         _write('\r')
         _write(joined)
         if pad > 0:
@@ -187,6 +190,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
     from .progress import ProgressBar
 
 _attached_progress_bars = []  # type: list["ProgressBar"]
+_dirty_progress_bars = set()  # type: set["ProgressBar"]
 _last_drawn_progress_count = 0
 _last_rendered_terminal_size: Optional[tuple[int, int]] = None
 _last_rendered_progress_lines: list[str] = []
@@ -203,6 +207,7 @@ def attach_progress_bar(pb: "ProgressBar") -> None:
     with _STATE_LOCK:
         if pb not in _attached_progress_bars:
             _attached_progress_bars.append(pb)
+        _dirty_progress_bars.add(pb)
         _record_progress_activity_locked()
     _ensure_background_refresh_thread()
 
@@ -213,6 +218,14 @@ def detach_progress_bar(pb: "ProgressBar") -> None:
     with _STATE_LOCK:
         if pb in _attached_progress_bars:
             _attached_progress_bars.remove(pb)
+        _dirty_progress_bars.discard(pb)
+        _record_progress_activity_locked()
+
+
+def mark_progress_bar_dirty(pb: "ProgressBar") -> None:
+    with _STATE_LOCK:
+        if pb in _attached_progress_bars:
+            _dirty_progress_bars.add(pb)
         _record_progress_activity_locked()
 
 
@@ -234,11 +247,17 @@ def _set_cursor_visibility_locked(visible: bool) -> None:
     _cursor_hidden = hidden
 
 
-def _clear_progress_stack_locked(*, show_cursor: bool = True, for_log_output: bool = False) -> None:
+def _clear_progress_stack_locked(
+    *,
+    show_cursor: bool = True,
+    for_log_output: bool = False,
+    backend_state: Optional[RenderBackendState] = None,
+) -> None:
     global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
 
     count = _last_drawn_progress_count
-    supports_cursor = _stdout_supports_cursor_movement()
+    state = backend_state or _current_render_backend_state()
+    supports_cursor = state.supports_cursor
 
     if not supports_cursor:
         if not _notebook_render_stack([]):
@@ -311,14 +330,14 @@ def _prepare_progress_stack_for_log_locked() -> bool:
     return True
 
 
-def clear_progress_stack(lock_held: bool = False) -> None:
+def clear_progress_stack(lock_held: bool = False, backend_state: Optional[RenderBackendState] = None) -> None:
     """Erase any rendered progress bars from the terminal."""
 
     if lock_held:
-        _clear_progress_stack_locked()
+        _clear_progress_stack_locked(backend_state=backend_state)
     else:
         with _RENDER_LOCK:
-            _clear_progress_stack_locked()
+            _clear_progress_stack_locked(backend_state=backend_state)
 
 
 def _active_progress_bars() -> list["ProgressBar"]:
@@ -326,18 +345,23 @@ def _active_progress_bars() -> list["ProgressBar"]:
         return list(_attached_progress_bars)
 
 
-def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
+def _render_progress_stack_locked(
+    precomputed: Optional[dict] = None,
+    columns_hint: Optional[int] = None,
+    backend_state: Optional[RenderBackendState] = None,
+) -> None:
     global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack
 
-    if columns_hint is not None:
-        columns = columns_hint
-        _, rows = terminal_size()
-    else:
-        columns, rows = terminal_size()
+    state = backend_state or _current_render_backend_state(columns_hint)
+    columns = state.columns
+    rows = state.lines
 
     bars = _active_progress_bars()
+    with _STATE_LOCK:
+        dirty_bars = set(_dirty_progress_bars)
     to_remove = []
     lines = []
+    size_changed = _last_rendered_terminal_size != (max(0, int(columns)), max(0, int(rows)))
 
     for pb in bars:
         if getattr(pb, "closed", False):
@@ -350,13 +374,22 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
 
         if rendered is None:
             try:
-                # Progress bars may throttle redraws. When a bar is not due for
-                # a fresh snapshot, keep its last rendered line in the stack
-                # instead of recomputing it opportunistically on another bar's
-                # redraw.
                 resolve_rendered = getattr(pb, "_resolve_rendered_line", None)
-                if callable(resolve_rendered):
-                    rendered = resolve_rendered(columns)
+                dirty_tracked = bool(getattr(pb, "_logbar_dirty_tracked", False))
+                should_refresh = (
+                    size_changed
+                    or pb in dirty_bars
+                    or not pb._last_rendered_line
+                    or not dirty_tracked
+                )
+                if not should_refresh and pb._last_rendered_line:
+                    rendered = pb._last_rendered_line
+                elif callable(resolve_rendered):
+                    rendered = resolve_rendered(
+                        columns,
+                        force=size_changed,
+                        allow_repeat=(size_changed or pb in dirty_bars),
+                    )
                     if rendered is None:
                         rendered = pb._last_rendered_line or ""
                 else:
@@ -373,14 +406,17 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
             for pb in to_remove:
                 if pb in _attached_progress_bars:
                     _attached_progress_bars.remove(pb)
+                _dirty_progress_bars.discard(pb)
 
-    supports_cursor = _stdout_supports_cursor_movement()
+    supports_cursor = state.supports_cursor
 
     if not supports_cursor:
         handled = _notebook_render_stack(lines)
         if not handled:
             _notebook_render_plain_stdout(lines)
             _flush_stream()
+        with _STATE_LOCK:
+            _dirty_progress_bars.difference_update(bars)
         _last_drawn_progress_count = 0
         _last_rendered_terminal_size = None
         _last_rendered_progress_lines = []
@@ -396,7 +432,6 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
 
     previous_count = _last_drawn_progress_count
     previous_lines = list(_last_rendered_progress_lines)
-    size_changed = _last_rendered_terminal_size != (terminal_columns, terminal_rows)
     sequences: list[str] = []
 
     can_diff_redraw = (
@@ -430,6 +465,8 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
         _last_rendered_progress_lines = list(lines)
         _cursor_positioned_above_stack = True
         _set_cursor_visibility_locked(False)
+        with _STATE_LOCK:
+            _dirty_progress_bars.difference_update(bars)
         _record_progress_activity_locked()
         return
 
@@ -454,6 +491,8 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
         _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         _set_cursor_visibility_locked(True)
+        with _STATE_LOCK:
+            _dirty_progress_bars.difference_update(bars)
         _record_progress_activity_locked()
         return
 
@@ -473,17 +512,24 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
     _last_rendered_progress_lines = list(lines)
     _cursor_positioned_above_stack = True
     _set_cursor_visibility_locked(False)
+    with _STATE_LOCK:
+        _dirty_progress_bars.difference_update(bars)
     _record_progress_activity_locked()
 
 
-def render_progress_stack(lock_held: bool = False, precomputed: Optional[dict] = None, columns_hint: Optional[int] = None) -> None:
+def render_progress_stack(
+    lock_held: bool = False,
+    precomputed: Optional[dict] = None,
+    columns_hint: Optional[int] = None,
+    backend_state: Optional[RenderBackendState] = None,
+) -> None:
     """Redraw all attached progress bars respecting their attach order."""
 
     if lock_held:
-        _render_progress_stack_locked(precomputed=precomputed, columns_hint=columns_hint)
+        _render_progress_stack_locked(precomputed=precomputed, columns_hint=columns_hint, backend_state=backend_state)
     else:
         with _RENDER_LOCK:
-            _render_progress_stack_locked(precomputed=precomputed, columns_hint=columns_hint)
+            _render_progress_stack_locked(precomputed=precomputed, columns_hint=columns_hint, backend_state=backend_state)
 
 
 def _record_progress_activity_locked() -> None:
@@ -496,14 +542,14 @@ def _record_progress_activity() -> None:
         _record_progress_activity_locked()
 
 
-def _should_refresh_in_background(now: float) -> bool:
-    stdout = sys.stdout
-    isatty = getattr(stdout, "isatty", None)
-    if callable(isatty):
-        try:
-            return bool(isatty())
-        except Exception:  # pragma: no cover - defensive: prefer dropping animation over crashing
-            return False
+def _should_refresh_in_background(state: RenderBackendState, bars: Sequence["ProgressBar"]) -> bool:
+    if state.supports_cursor or state.notebook:
+        return True
+
+    for pb in bars:
+        if callable(getattr(pb, "_tick_background_refresh", None)):
+            return True
+
     return False
 
 
@@ -511,29 +557,57 @@ def _progress_refresh_worker() -> None:
     while True:
         time.sleep(_REFRESH_INTERVAL_SECONDS)
 
-        now = time.monotonic()
         with _STATE_LOCK:
             has_progress = bool(_attached_progress_bars)
-            last_active = _last_active_draw
 
         if not has_progress:
             continue
 
-        if now - last_active < _REFRESH_INTERVAL_SECONDS:
+        try:
+            state = _current_render_backend_state()
+        except Exception:
             continue
 
-        if not _should_refresh_in_background(now):
+        if not _RENDER_LOCK.acquire(blocking=False):
             continue
 
         try:
-            if not _RENDER_LOCK.acquire(blocking=False):
+            bars = _active_progress_bars()
+            if not bars:
                 continue
-            try:
-                _render_progress_stack_locked()
-            finally:
-                _RENDER_LOCK.release()
+
+            if not _should_refresh_in_background(state, bars):
+                continue
+
+            now = time.monotonic()
+            precomputed = {}
+            for pb in bars:
+                tick = getattr(pb, "_tick_background_refresh", None)
+                if not callable(tick) or not tick(now):
+                    continue
+
+                resolve_rendered = getattr(pb, "_resolve_rendered_line", None)
+                if callable(resolve_rendered):
+                    rendered = resolve_rendered(
+                        state.columns,
+                        force=True,
+                        allow_repeat=True,
+                    )
+                    precomputed[pb] = rendered if rendered is not None else (pb._last_rendered_line or "")
+
+            size_changed = state.supports_cursor and _last_rendered_terminal_size != (state.columns, state.lines)
+            if not precomputed and not size_changed:
+                continue
+
+            _render_progress_stack_locked(
+                precomputed=precomputed or None,
+                columns_hint=state.columns,
+                backend_state=state,
+            )
         except Exception:
             continue
+        finally:
+            _RENDER_LOCK.release()
 
 
 def _ensure_background_refresh_thread() -> None:

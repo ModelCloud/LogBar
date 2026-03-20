@@ -8,7 +8,6 @@ import os
 import re
 import sys
 import time
-import threading
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -18,9 +17,11 @@ from warnings import warn
 
 from . import LogBar
 from .logbar import (
+    _running_in_notebook_environment,
     attach_progress_bar,
     detach_progress_bar,
     _record_progress_activity,
+    mark_progress_bar_dirty,
     render_lock,
     render_progress_stack,
 )
@@ -39,7 +40,7 @@ from .drawing import (
     truncate_ansi,
     visible_length,
 )
-from .terminal import terminal_size
+from .terminal import render_backend_state, terminal_size
 from .util import auto_iterable
 
 logger = LogBar.shared()
@@ -415,6 +416,29 @@ class ProgressBar:
         self._attached_logger: Optional["LogBarType"] = None
         self._attached = False
         self._last_rendered_line = ""
+        self._logbar_dirty_tracked = True
+        self._next_title_refresh_at = 0.0
+
+    def _mark_dirty(self):
+        if self._attached:
+            mark_progress_bar_dirty(self)
+        return self
+
+    def _tick_background_refresh(self, now: float) -> bool:
+        if not self._attached or not self._title or not self._should_animate_title():
+            self._next_title_refresh_at = 0.0
+            return False
+
+        period = max(self._title_animation_period, 1e-6)
+        if self._next_title_refresh_at <= 0:
+            self._next_title_refresh_at = now + period
+            return False
+
+        if now < self._next_title_refresh_at:
+            return False
+
+        self._next_title_refresh_at = now + period
+        return True
 
     def set(self,
             show_left_steps: Optional[bool] = None,
@@ -425,19 +449,19 @@ class ProgressBar:
 
         if left_steps_offset is not None:
             self.ui_show_left_steps_offset = left_steps_offset
-        return self
+        return self._mark_dirty()
 
     def style(self, style: Union[str, ProgressStyle]):
         resolved = get_progress_style(style)
         self._style = resolved
         self._style_name = resolved.name
-        return self
+        return self._mark_dirty()
 
     def output_interval(self, interval: int):
         """Render after at least `interval` logical progress updates."""
 
         self._output_interval = _normalize_output_interval(interval)
-        return self
+        return self._mark_dirty()
 
     def fill(self, fill: Union[str, ProgressStyle] = "█", empty: Optional[str] = None):
         if isinstance(fill, ProgressStyle) or (isinstance(fill, str) and fill in _PROGRESS_STYLES):
@@ -459,7 +483,7 @@ class ProgressBar:
 
         self._style = style
         self._style_name = style.name
-        return self
+        return self._mark_dirty()
 
     def colors(
         self,
@@ -491,7 +515,7 @@ class ProgressBar:
 
         self._style = style
         self._style_name = style.name
-        return self
+        return self._mark_dirty()
 
     def head(self, char: Optional[str] = None, color: Optional[str] = None):
         style = self._style
@@ -507,7 +531,7 @@ class ProgressBar:
 
         self._style = style
         self._style_name = style.name
-        return self
+        return self._mark_dirty()
 
     def title(self, title: str):
         if self._iterating and self._render_mode != RenderMode.MANUAL:
@@ -526,7 +550,8 @@ class ProgressBar:
         # the text instead of snapping back to the first character.
         if not previous_title and title:
             self._title_animation_start = time.time()
-        return self
+        self._next_title_refresh_at = 0.0
+        return self._mark_dirty()
 
     def subtitle(self, subtitle: str):
         if self._iterating and self._render_mode != RenderMode.MANUAL:
@@ -537,19 +562,20 @@ class ProgressBar:
             self.max_subtitle_len = subtitle_len
 
         self._subtitle = subtitle
-        return self
+        return self._mark_dirty()
 
     # set render mode
     def mode(self, mode: RenderMode):
         self._render_mode = mode
+        return self._mark_dirty()
 
     def auto(self):
         self._render_mode = RenderMode.AUTO
-        return self
+        return self._mark_dirty()
 
     def manual(self ):
         self._render_mode = RenderMode.MANUAL
-        return self
+        return self._mark_dirty()
 
     def _render_lock_context(self):
         lock_provider = render_lock if callable(render_lock) else None
@@ -633,6 +659,7 @@ class ProgressBar:
         self._owner_logger = target_logger
         attach_progress_bar(self)
         self._attached = True
+        self._next_title_refresh_at = 0.0
 
         render_fn = render_progress_stack if callable(render_progress_stack) else None
         context, lock_held = self._render_lock_context()
@@ -684,6 +711,7 @@ class ProgressBar:
                 self._attached = False
                 self._attached_logger = None
                 self._last_rendered_line = ""
+                self._next_title_refresh_at = 0.0
 
         return self
 
@@ -727,7 +755,12 @@ class ProgressBar:
         # refresher from redrawing the same bar immediately and undoing the
         # throttle when progress is advancing quickly.
         _record_progress_activity()
-        columns, _ = terminal_size()
+        backend_state = render_backend_state(
+            stream=sys.stdout,
+            size_provider=terminal_size,
+            notebook=_running_in_notebook_environment(),
+        )
+        columns = backend_state.columns
         rendered_line = self._resolve_rendered_line(columns, force=force, allow_repeat=True)
         if rendered_line is None:
             return
@@ -745,15 +778,16 @@ class ProgressBar:
             return
 
         with context:
-            try:
-                render_fn(
-                    lock_held=lock_held,
-                    precomputed={self: rendered_line},
-                    columns_hint=columns,
-                )
-            except Exception:
-                if not sys.is_finalizing():
-                    raise
+                try:
+                    render_fn(
+                        lock_held=lock_held,
+                        precomputed={self: rendered_line},
+                        columns_hint=columns,
+                        backend_state=backend_state,
+                    )
+                except Exception:
+                    if not sys.is_finalizing():
+                        raise
 
     def calc_time(self, iteration):
         used_time = int(time.time() - self.time)
@@ -1042,16 +1076,15 @@ class RollingProgressBar(ProgressBar):
         self._tail_length = max(1, int(tail_length))
         self._phase = 0
         self.ui_show_left_steps = False
-        self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._next_spinner_refresh_at = 0.0
 
     def attach(self, logger: Optional["LogBarType"] = None):
         super().attach(logger)
-        self._ensure_auto_updates()
+        self._next_spinner_refresh_at = time.monotonic() + self._interval
         return self
 
     def detach(self):
-        self._stop_auto_updates()
+        self._next_spinner_refresh_at = 0.0
         return super().detach()
 
     def close(self):
@@ -1059,49 +1092,43 @@ class RollingProgressBar(ProgressBar):
             return
 
         self.closed = True
-        self._stop_auto_updates()
         self.detach()
 
     def pulse(self) -> "RollingProgressBar":
         """Advance the animation a single frame and redraw immediately."""
 
         self._advance_phase()
+        self._next_spinner_refresh_at = time.monotonic() + self._interval
         self.draw()
         return self
 
     def _ensure_auto_updates(self) -> None:
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            return
-
-        self._stop_event = threading.Event()
-        thread = threading.Thread(target=self._animate_loop, name="logbar-rolling-progress", daemon=True)
-        self._thread = thread
-        thread.start()
+        return None
 
     def _stop_auto_updates(self) -> None:
-        thread = self._thread
-        if thread is None:
-            return
+        return None
 
-        self._stop_event.set()
-        thread.join(timeout=max(self._interval * 2, 0.1))
-        self._thread = None
-        self._stop_event = threading.Event()
+    def _tick_background_refresh(self, now: float) -> bool:
+        changed = super()._tick_background_refresh(now)
 
-    def _animate_loop(self) -> None:
-        while not self._stop_event.is_set() and not self.closed:
-            time.sleep(self._interval)
-            if self.closed:
-                break
-            self._advance_phase()
-            try:
-                self.draw()
-            except Exception:
-                continue
+        if not self._attached or self.closed:
+            self._next_spinner_refresh_at = 0.0
+            return changed
 
-    def _advance_phase(self) -> None:
-        self._phase = (self._phase + 1) % 1_000_000
+        if self._next_spinner_refresh_at <= 0:
+            self._next_spinner_refresh_at = now + self._interval
+            return changed
+
+        if now < self._next_spinner_refresh_at:
+            return changed
+
+        steps = max(1, int((now - self._next_spinner_refresh_at) // self._interval) + 1)
+        self._advance_phase(steps=steps)
+        self._next_spinner_refresh_at += self._interval * steps
+        return True
+
+    def _advance_phase(self, steps: int = 1) -> None:
+        self._phase = (self._phase + max(1, int(steps))) % 1_000_000
 
     def _render_position(self) -> int:
         return self._phase
