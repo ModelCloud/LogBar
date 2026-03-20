@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
+import os
 import subprocess
 import random
 import re
@@ -15,6 +16,7 @@ from time import sleep
 from unittest.mock import patch
 
 from logbar import LogBar
+from logbar import progress as progress_module
 from logbar.progress import ProgressBar, TITLE_HIGHLIGHT_COLOR, ANSI_BOLD_RESET
 from logbar.logbar import _active_progress_bars
 
@@ -169,6 +171,52 @@ class TestProgress(unittest.TestCase):
             check=True,
         )
         self.assertEqual(disabled.stdout.strip(), "0")
+
+    def test_progress_output_interval_respects_env(self):
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10"}):
+            cache_clear()
+            pb = ProgressBar(range(5))
+            self.assertEqual(pb._output_interval, 10)
+            with redirect_stdout(StringIO()):
+                pb.close()
+
+        cache_clear()
+
+    def test_progress_output_interval_defaults_to_one(self):
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with patch.dict(os.environ, {}, clear=True):
+            cache_clear()
+            pb = ProgressBar(range(5))
+            self.assertEqual(pb._output_interval, 1)
+            with redirect_stdout(StringIO()):
+                pb.close()
+
+        cache_clear()
+
+    def test_progress_output_interval_skips_intermediate_draws_but_flushes_final_step(self):
+        columns = 96
+
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)), \
+             patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb = log.pb(15, output_interval=10).manual()
+                for step in range(1, 16):
+                    pb.current_iter_step = step
+                    pb.draw()
+                pb.close()
+
+        lines = extract_rendered_lines(buffer.getvalue())
+        progress_lines = [line for line in lines if "/15]" in line]
+
+        self.assertTrue(any("[0/15]" in line for line in progress_lines))
+        self.assertTrue(any("[10/15]" in line for line in progress_lines))
+        self.assertTrue(any("[15/15]" in line and "100.0%" in line for line in progress_lines))
+        self.assertFalse(any("[9/15]" in line for line in progress_lines))
+        self.assertFalse(any("[14/15]" in line for line in progress_lines))
 
     def test_draw_respects_terminal_width(self):
         pb = log.pb(100).title("TITLE").subtitle("SUBTITLE").manual()

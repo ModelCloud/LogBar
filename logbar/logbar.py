@@ -319,7 +319,17 @@ def _render_progress_stack_locked(precomputed: Optional[dict] = None, columns_hi
 
         if rendered is None:
             try:
-                rendered = pb._render_snapshot(columns)
+                # Progress bars may throttle redraws. When a bar is not due for
+                # a fresh snapshot, keep its last rendered line in the stack
+                # instead of recomputing it opportunistically on another bar's
+                # redraw.
+                resolve_rendered = getattr(pb, "_resolve_rendered_line", None)
+                if callable(resolve_rendered):
+                    rendered = resolve_rendered(columns)
+                    if rendered is None:
+                        rendered = pb._last_rendered_line or ""
+                else:
+                    rendered = pb._render_snapshot(columns)
             except Exception:  # pragma: no cover - avoid breaking logging on render issues
                 rendered = pb._last_rendered_line or ""
         else:
@@ -565,10 +575,10 @@ class LogBar(logging.Logger):
         return shared_logger
 
 
-    def pb(self, iterable: Iterable):
+    def pb(self, iterable: Iterable, *, output_interval: Optional[int] = None):
         from logbar.progress import ProgressBar
 
-        return ProgressBar(iterable, owner=self).attach(self)
+        return ProgressBar(iterable, owner=self, output_interval=output_interval).attach(self)
 
     def spinner(self, title: str = "", *, interval: float = 0.5, tail_length: int = 4):
         from logbar.progress import RollingProgressBar
