@@ -82,6 +82,27 @@ def _env_animation_enabled() -> bool:
     return str(value).strip().lower() not in {"0", "false", "off", "no"}
 
 
+def _normalize_output_interval(value: Optional[Union[str, int]]) -> int:
+    """Normalize logical progress render intervals to a safe integer >= 1."""
+
+    if value is None:
+        return 1
+
+    try:
+        normalized = int(str(value).strip())
+    except (TypeError, ValueError):
+        return 1
+
+    return max(1, normalized)
+
+
+@lru_cache(maxsize=1)
+def _env_progress_output_interval() -> int:
+    """Global default for how many logical progress updates occur per render."""
+
+    return _normalize_output_interval(os.environ.get("LOGBAR_PROGRESS_OUTPUT_INTERVAL", "1"))
+
+
 def _fg_256(code: int) -> str:
     return f"\033[38;5;{code}m"
 
@@ -374,7 +395,13 @@ class ProgressBar:
     def default_style(cls) -> ProgressStyle:
         return get_progress_style(_DEFAULT_STYLE_NAME)
 
-    def __init__(self, iterable: Union[Iterable, int, dict, set], owner: Optional["LogBarType"] = None):
+    def __init__(
+        self,
+        iterable: Union[Iterable, int, dict, set],
+        owner: Optional["LogBarType"] = None,
+        *,
+        output_interval: Optional[int] = None,
+    ):
         self._iterating = False # state: in init or active iteration
 
         self._render_mode = RenderMode.AUTO
@@ -398,6 +425,10 @@ class ProgressBar:
         self.time = time.time()
         self._title_animation_start = self.time
         self._title_animation_period = 0.1
+        self._output_interval = _normalize_output_interval(
+            _env_progress_output_interval() if output_interval is None else output_interval
+        )
+        self._last_output_step: Optional[int] = None
 
         self.ui_show_left_steps = True # show [1 of 100] on left side
         self.ui_show_left_steps_offset = 0
@@ -422,6 +453,12 @@ class ProgressBar:
         resolved = get_progress_style(style)
         self._style = resolved
         self._style_name = resolved.name
+        return self
+
+    def output_interval(self, interval: int):
+        """Render after at least `interval` logical progress updates."""
+
+        self._output_interval = _normalize_output_interval(interval)
         return self
 
     def fill(self, fill: Union[str, ProgressStyle] = "█", empty: Optional[str] = None):
@@ -672,10 +709,50 @@ class ProgressBar:
 
         return self
 
-    def draw(self):
+    def _render_position(self) -> int:
+        """Progress coordinate used for render throttling."""
+
+        return self.step()
+
+    def _should_render(self, force: bool = False, allow_repeat: bool = False) -> bool:
+        if force:
+            return True
+
+        if not self._last_rendered_line:
+            return True
+
+        last_output_step = self._last_output_step
+        if last_output_step is None:
+            return True
+
+        current_step = self._render_position()
+        if allow_repeat and current_step <= last_output_step:
+            return True
+
+        return (current_step - last_output_step) >= self._output_interval
+
+    def _resolve_rendered_line(
+        self,
+        columns: int,
+        force: bool = False,
+        allow_repeat: bool = False,
+    ) -> Optional[str]:
+        if not self._should_render(force=force, allow_repeat=allow_repeat):
+            return None
+
+        rendered_line = self._render_snapshot(columns)
+        self._last_output_step = self._render_position()
+        return rendered_line
+
+    def draw(self, force: bool = False):
+        # Even skipped draws count as activity. This prevents the background
+        # refresher from redrawing the same bar immediately and undoing the
+        # throttle when progress is advancing quickly.
         _record_progress_activity()
         columns, _ = terminal_size()
-        rendered_line = self._render_snapshot(columns)
+        rendered_line = self._resolve_rendered_line(columns, force=force, allow_repeat=True)
+        if rendered_line is None:
+            return
 
         render_fn = render_progress_stack if callable(render_progress_stack) else None
         context, lock_held = self._render_lock_context()
@@ -976,6 +1053,13 @@ class ProgressBar:
         if self.closed:
             return
 
+        # Force the last observed progress state to render even when the final
+        # step does not land on the configured output interval, e.g. 15 with an
+        # interval of 10. Without this, the closing detach would erase the bar
+        # before a 100% snapshot is ever emitted.
+        if self.step() > 0 and (self._last_output_step is None or self.step() != self._last_output_step):
+            self.draw(force=True)
+
         self.closed = True
         self.detach()
 
@@ -984,7 +1068,10 @@ class RollingProgressBar(ProgressBar):
     """Indeterminate progress indicator with a rolling highlight."""
 
     def __init__(self, owner: Optional["LogBarType"] = None, interval: float = 0.5, tail_length: int = 4):
-        super().__init__(iterable=1, owner=owner)
+        # Spinner animation already has its own wall-clock interval. Keep
+        # output throttling at 1 so the phase animation stays smooth unless a
+        # caller explicitly changes it later.
+        super().__init__(iterable=1, owner=owner, output_interval=1)
         self._interval = max(0.05, float(interval))
         self._tail_length = max(1, int(tail_length))
         self._phase = 0
@@ -1049,6 +1136,9 @@ class RollingProgressBar(ProgressBar):
 
     def _advance_phase(self) -> None:
         self._phase = (self._phase + 1) % 1_000_000
+
+    def _render_position(self) -> int:
+        return self._phase
 
     def _render_snapshot(self, columns: Optional[int] = None) -> str:
         if columns is None:

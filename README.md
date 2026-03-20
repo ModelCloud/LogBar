@@ -24,6 +24,8 @@
 - Built-in styling for progress bar fills, colors, gradients, and head glyphs.
 - Animated progress titles with a subtle sweeping highlight.
   Set `LOGBAR_ANIMATION=0` to disable the highlight animation.
+- Progress output throttling for reducing redraw churn in batch-heavy jobs.
+  Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to render every 10 logical updates instead of every update.
 - Column-aware table printer with spans, width hints, and `fit` sizing.
 - Zero dependencies; works anywhere Python runs.
 
@@ -98,6 +100,15 @@ for item in log.pb(tasks):
 for _ in log.pb(500).title("Downloading"):
     time.sleep(0.05)
 ```
+
+When a workload updates progress very frequently, throttle redraw churn globally or per bar:
+
+```py
+for _ in log.pb(500, output_interval=10).title("Quantizing"):
+    time.sleep(0.01)
+```
+
+`output_interval=10` means LogBar will emit a fresh snapshot after roughly every 10 logical progress steps, while still forcing the last pending step to render before the bar closes. Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to apply the same default process-wide.
 
 Manual mode gives full control when you need to interleave logging and redraws:
 
