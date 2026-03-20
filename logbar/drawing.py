@@ -7,6 +7,7 @@
 
 from dataclasses import dataclass
 from functools import lru_cache
+import html
 import re
 import unicodedata
 from typing import Callable, Optional, Sequence
@@ -26,6 +27,24 @@ _ZERO_WIDTH_JOINER = "\u200d"
 _EMOJI_TEXT_VARIATION = "\ufe0e"
 _EMOJI_PRESENTATION_VARIATION = "\ufe0f"
 _KEYCAP_COMBINING = "\u20e3"
+_ANSI_BASIC_FG = {
+    30: "#000000",
+    31: "#aa0000",
+    32: "#00aa00",
+    33: "#aa5500",
+    34: "#0000aa",
+    35: "#aa00aa",
+    36: "#00aaaa",
+    37: "#aaaaaa",
+    90: "#555555",
+    91: "#ff5555",
+    92: "#55ff55",
+    93: "#ffff55",
+    94: "#5555ff",
+    95: "#ff55ff",
+    96: "#55ffff",
+    97: "#ffffff",
+}
 
 
 @lru_cache(maxsize=8192)
@@ -232,6 +251,138 @@ def iter_ansi_tokens(text: str):
                 continue
         yield False, text[i]
         i += 1
+
+
+@lru_cache(maxsize=1024)
+def _xterm_256_to_css(code: int) -> str:
+    code = max(0, min(255, int(code)))
+    if code < 16:
+        table = {
+            0: "#000000",
+            1: "#800000",
+            2: "#008000",
+            3: "#808000",
+            4: "#000080",
+            5: "#800080",
+            6: "#008080",
+            7: "#c0c0c0",
+            8: "#808080",
+            9: "#ff0000",
+            10: "#00ff00",
+            11: "#ffff00",
+            12: "#0000ff",
+            13: "#ff00ff",
+            14: "#00ffff",
+            15: "#ffffff",
+        }
+        return table[code]
+
+    if code < 232:
+        color = code - 16
+        red = color // 36
+        green = (color % 36) // 6
+        blue = color % 6
+        levels = (0, 95, 135, 175, 215, 255)
+        return f"rgb({levels[red]}, {levels[green]}, {levels[blue]})"
+
+    level = 8 + ((code - 232) * 10)
+    return f"rgb({level}, {level}, {level})"
+
+
+@lru_cache(maxsize=4096)
+def _apply_sgr_style(bold: bool, fg_color: str, token: str) -> tuple[bool, str]:
+    if not token.endswith("m"):
+        return bold, fg_color
+
+    params = token[2:-1]
+    values = [0] if not params else [int(part) if part else 0 for part in params.split(";")]
+
+    idx = 0
+    while idx < len(values):
+        code = values[idx]
+        if code == 0:
+            bold = False
+            fg_color = ""
+        elif code == 1:
+            bold = True
+        elif code == 22:
+            bold = False
+        elif code == 39:
+            fg_color = ""
+        elif code in _ANSI_BASIC_FG:
+            fg_color = _ANSI_BASIC_FG[code]
+        elif code == 38 and idx + 1 < len(values):
+            mode = values[idx + 1]
+            if mode == 5 and idx + 2 < len(values):
+                fg_color = _xterm_256_to_css(values[idx + 2])
+                idx += 2
+            elif mode == 2 and idx + 4 < len(values):
+                red = max(0, min(255, values[idx + 2]))
+                green = max(0, min(255, values[idx + 3]))
+                blue = max(0, min(255, values[idx + 4]))
+                fg_color = f"rgb({red}, {green}, {blue})"
+                idx += 4
+        idx += 1
+
+    return bold, fg_color
+
+
+@lru_cache(maxsize=4096)
+def _inline_css_style(bold: bool, fg_color: str) -> str:
+    parts = []
+    if bold:
+        parts.append("font-weight:700")
+    if fg_color:
+        parts.append(f"color:{fg_color}")
+    return "; ".join(parts)
+
+
+def ansi_to_html(text: str) -> str:
+    if not text:
+        return ""
+
+    parts: list[str] = []
+    bold = False
+    fg_color = ""
+    span_open = False
+    cursor = 0
+
+    def _append_plain(chunk: str) -> None:
+        nonlocal span_open
+        if not chunk:
+            return
+
+        css = _inline_css_style(bold, fg_color)
+        if css and not span_open:
+            parts.append(f'<span style="{css}">')
+            span_open = True
+        elif not css and span_open:
+            parts.append("</span>")
+            span_open = False
+
+        parts.append(html.escape(chunk))
+
+    for match in ANSI_ESCAPE_RE.finditer(text):
+        if match.start() > cursor:
+            _append_plain(text[cursor:match.start()])
+
+        token = match.group(0)
+        next_bold, next_fg_color = _apply_sgr_style(bold, fg_color, token)
+        if (next_bold, next_fg_color) != (bold, fg_color):
+            if span_open:
+                parts.append("</span>")
+                span_open = False
+
+            bold, fg_color = next_bold, next_fg_color
+        cursor = match.end()
+
+    if cursor < len(text):
+        _append_plain(text[cursor:])
+
+    if span_open:
+        parts.append("</span>")
+
+    return "".join(parts)
 
 
 @lru_cache(maxsize=8192)

@@ -456,6 +456,8 @@ class TestProgress(unittest.TestCase):
         logbar_module._notebook_display_handle = None
 
         with patch('logbar.logbar._running_in_notebook_environment', return_value=True), \
+             patch('logbar.progress._running_in_notebook_environment', return_value=True), \
+             patch.dict('logbar.terminal.os.environ', {}, clear=True), \
              patch.object(ip_display, 'display', side_effect=stub_display):
             buffer = StringIO()
             with redirect_stdout(buffer):
@@ -468,9 +470,34 @@ class TestProgress(unittest.TestCase):
         self.assertIn('text/plain', initial)
         self.assertIn('text/html', initial)
         self.assertIn('NB', initial['text/plain'])
-        self.assertIn('NB', initial['text/html'])
+        self.assertIn('[3 of 5]', initial['text/html'])
         self.assertIn('<pre', initial['text/html'])
+        self.assertIn('<span style=', initial['text/html'])
+        self.assertNotIn('\033[', initial['text/plain'])
         self.assertEqual(initial, repeat)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
+    def test_progress_draw_reuses_backend_state_within_a_frame(self):
+        pb = ProgressBar(range(10))
+        pb.manual()
+        pb.current_iter_step = 5
+
+        original = progress_module.render_backend_state
+        calls = []
+
+        def counting_backend_state(*args, **kwargs):
+            calls.append((args, kwargs))
+            return original(*args, **kwargs)
+
+        with patch('logbar.progress.render_backend_state', side_effect=counting_backend_state), \
+             patch('logbar.progress.terminal_size', return_value=(48, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        self.assertEqual(len(calls), 1)
 
         with redirect_stdout(StringIO()):
             pb.close()
@@ -495,6 +522,23 @@ class TestProgress(unittest.TestCase):
         self.assertTrue(pb_indices, "expected a progress bar line in output")
         self.assertLess(info_indices[-1], pb_indices[-1])
         self.assertIn('PB', lines[pb_indices[-1]])
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
+    def test_progress_draw_plain_stream_omits_ansi_sequences(self):
+        pb = log.pb(10).title("PB").manual()
+        pb.current_iter_step = 5
+
+        with patch.dict('logbar.terminal.os.environ', {}, clear=True), \
+             patch('logbar.progress.terminal_size', return_value=(48, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        raw = buffer.getvalue()
+        self.assertIn('PB', raw)
+        self.assertNotIn('\033[', raw)
 
         with redirect_stdout(StringIO()):
             pb.close()

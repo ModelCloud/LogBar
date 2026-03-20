@@ -119,6 +119,17 @@ class TestProgressBar(unittest.TestCase):
         # The log output should have been written to the patched stdout buffer.
         self.assertIn("logging without terminal", stdout.getvalue())
 
+    def test_log_plain_stream_omits_ansi_sequences(self):
+        stdout = io.StringIO()
+
+        with mock.patch('sys.stdout', stdout), \
+             mock.patch.dict('logbar.terminal.os.environ', {}, clear=True):
+            log.info("plain stream log")
+
+        output = stdout.getvalue()
+        self.assertIn("plain stream log", output)
+        self.assertNotIn("\033[", output)
+
     def test_percent_formatting(self):
         output = self.capture_log(log.info, "%d", 123)
         self.assertIn("123", output)

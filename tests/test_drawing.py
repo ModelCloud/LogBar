@@ -5,7 +5,7 @@
 
 import unittest
 
-from logbar.drawing import CellBarRenderer, strip_ansi, truncate_ansi, visible_length
+from logbar.drawing import CellBarRenderer, ansi_to_html, strip_ansi, truncate_ansi, visible_length
 from logbar.progress import ProgressStyle
 
 
@@ -53,3 +53,13 @@ class TestDrawing(unittest.TestCase):
         self.assertEqual(strip_ansi(truncate_ansi(text, 7)), "A")
         self.assertEqual(strip_ansi(truncate_ansi(text, 8)), "A\t")
         self.assertEqual(strip_ansi(truncate_ansi(text, 9)), "A\tB")
+
+    def test_ansi_to_html_preserves_basic_color_and_bold(self):
+        text = "\033[32mgreen \033[1mbold\033[22m plain\033[0m"
+        rendered = ansi_to_html(text)
+
+        self.assertIn("color:#00aa00", rendered)
+        self.assertIn("font-weight:700", rendered)
+        self.assertIn("green ", rendered)
+        self.assertIn("bold", rendered)
+        self.assertIn(" plain", rendered)

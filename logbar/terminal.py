@@ -21,6 +21,8 @@ class RenderBackendState:
     is_tty: bool
     notebook: bool
     supports_cursor: bool
+    supports_ansi: bool
+    supports_styling: bool
 
 
 def _stream_terminal_size(stream: Optional[object], fallback: tuple[int, int]) -> Optional[tuple[int, int]]:
@@ -104,9 +106,31 @@ def render_backend_state(
         except Exception:
             is_tty = False
 
+    term_value = str(os.environ.get("TERM", "")).strip().lower()
+    force_cursor = bool(os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "").strip())
+    force_ansi = any(
+        str(os.environ.get(name, "")).strip().lower() not in {"", "0", "false", "off", "no"}
+        for name in ("LOGBAR_FORCE_ANSI", "CLICOLOR_FORCE", "FORCE_COLOR")
+    )
+    disable_styling = (
+        "NO_COLOR" in os.environ
+        or str(os.environ.get("ANSI_COLORS_DISABLED", "")).strip().lower() not in {"", "0", "false", "off", "no"}
+    )
+    raw_ansi_blocked = term_value == "dumb" and not force_ansi
+
     supports_cursor = is_tty or bool(os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "").strip())
     if notebook:
         supports_cursor = False
+    elif force_cursor:
+        supports_cursor = True
+
+    supports_ansi = False
+    if not notebook and not disable_styling and not raw_ansi_blocked:
+        supports_ansi = force_ansi or is_tty
+
+    supports_styling = False
+    if not disable_styling:
+        supports_styling = notebook or force_ansi or is_tty
 
     return RenderBackendState(
         columns=max(0, int(columns)),
@@ -114,4 +138,6 @@ def render_backend_state(
         is_tty=is_tty,
         notebook=notebook,
         supports_cursor=supports_cursor,
+        supports_ansi=supports_ansi,
+        supports_styling=supports_styling,
     )

@@ -40,7 +40,7 @@ from .drawing import (
     truncate_ansi,
     visible_length,
 )
-from .terminal import render_backend_state, terminal_size
+from .terminal import RenderBackendState, render_backend_state, terminal_size
 from .util import auto_iterable
 
 logger = LogBar.shared()
@@ -742,13 +742,28 @@ class ProgressBar:
         columns: int,
         force: bool = False,
         allow_repeat: bool = False,
+        backend_state: Optional[RenderBackendState] = None,
+        style_enabled: Optional[bool] = None,
     ) -> Optional[str]:
         if not self._should_render(force=force, allow_repeat=allow_repeat):
             return None
 
-        rendered_line = self._render_snapshot(columns)
+        rendered_line = self._render_snapshot(
+            columns,
+            backend_state=backend_state,
+            style_enabled=style_enabled,
+        )
         self._last_output_step = self._render_position()
         return rendered_line
+
+    def _render_backend_state(self, backend_state: Optional[RenderBackendState] = None) -> RenderBackendState:
+        if backend_state is not None:
+            return backend_state
+        return render_backend_state(
+            stream=sys.stdout,
+            size_provider=terminal_size,
+            notebook=_running_in_notebook_environment(),
+        )
 
     def draw(self, force: bool = False):
         # Even skipped draws count as activity. This prevents the background
@@ -761,11 +776,18 @@ class ProgressBar:
             notebook=_running_in_notebook_environment(),
         )
         columns = backend_state.columns
-        rendered_line = self._resolve_rendered_line(columns, force=force, allow_repeat=True)
+        render_fn = render_progress_stack if callable(render_progress_stack) else None
+        style_enabled = backend_state.supports_styling if self._attached and render_fn is not None else backend_state.supports_ansi
+        rendered_line = self._resolve_rendered_line(
+            columns,
+            force=force,
+            allow_repeat=True,
+            backend_state=backend_state,
+            style_enabled=style_enabled,
+        )
         if rendered_line is None:
             return
 
-        render_fn = render_progress_stack if callable(render_progress_stack) else None
         context, lock_held = self._render_lock_context()
 
         if not self._attached or render_fn is None:
@@ -798,9 +820,17 @@ class ProgressBar:
         remaining = str(datetime.timedelta(seconds=int((used_time / max(completed, 1)) * len(self))))
         return f"{formatted_time} / {remaining}"
 
-    def _render_snapshot(self, columns: Optional[int] = None) -> str:
+    def _render_snapshot(
+        self,
+        columns: Optional[int] = None,
+        *,
+        backend_state: Optional[RenderBackendState] = None,
+        style_enabled: Optional[bool] = None,
+    ) -> str:
+        backend_state = self._render_backend_state(backend_state)
         if columns is None:
-            columns, _ = terminal_size()
+            columns = backend_state.columns
+        supports_styling = backend_state.supports_styling if style_enabled is None else bool(style_enabled)
 
         total_steps = len(self)
         effective_total = total_steps if total_steps else 1
@@ -855,6 +885,8 @@ class ProgressBar:
             total_cells=bar_length,
             filled_units=filled_units,
         )
+        if not supports_styling:
+            bar_rendered = bar_plain
 
         rendered_line = self._render_line(
             bar_plain=bar_plain,
@@ -862,6 +894,11 @@ class ProgressBar:
             log_text=log_text,
             pre_bar_padding=padding,
             columns=columns,
+            supports_styling=supports_styling,
+            animate_title=self._should_animate_title(
+                backend_state=backend_state,
+                style_enabled=supports_styling,
+            ),
         )
 
         self._last_rendered_line = rendered_line
@@ -874,6 +911,8 @@ class ProgressBar:
         pre_bar_padding: str = "",
         columns: Optional[int] = None,
         bar_rendered: Optional[str] = None,
+        supports_styling: bool = True,
+        animate_title: Optional[bool] = None,
     ) -> str:
         segments_plain = []
         segments_rendered = []
@@ -882,7 +921,8 @@ class ProgressBar:
             segments_plain.append(plain if plain is not None else text)
             segments_rendered.append(rendered if rendered is not None else text)
 
-        animate_title = self._should_animate_title()
+        if animate_title is None:
+            animate_title = supports_styling and self._should_animate_title(style_enabled=supports_styling)
 
         if self._title:
             if animate_title:
@@ -907,16 +947,24 @@ class ProgressBar:
                 append_segment(left_steps_text)
 
         plain_bar_segment = f"{bar_plain}| {log_text}"
-        rendered_bar_segment = f"{bar_rendered}| {log_text}" if bar_rendered is not None else None
+        rendered_bar_segment = (
+            f"{bar_rendered}| {log_text}"
+            if supports_styling and bar_rendered is not None
+            else None
+        )
         append_segment(plain_bar_segment, rendered_bar_segment)
 
         plain_out = ''.join(segments_plain)
-        rendered_out = ''.join(segments_rendered)
+        rendered_out = ''.join(segments_rendered) if supports_styling else plain_out
 
         if columns is not None:
             plain_width = visible_length(plain_out)
             if plain_width > columns:
-                rendered_out = self._truncate_ansi(rendered_out, columns)
+                rendered_out = (
+                    self._truncate_ansi(rendered_out, columns)
+                    if supports_styling
+                    else strip_ansi(self._truncate_ansi(plain_out, columns))
+                )
             elif plain_width < columns:
                 pad = " " * (columns - plain_width)
                 plain_out += pad
@@ -967,18 +1015,20 @@ class ProgressBar:
     def _truncate_ansi(self, text: str, limit: int) -> str:
         return truncate_ansi(text, limit)
 
-    def _should_animate_title(self) -> bool:
+    def _should_animate_title(
+        self,
+        backend_state: Optional[RenderBackendState] = None,
+        style_enabled: Optional[bool] = None,
+    ) -> bool:
         if not _env_animation_enabled():
             return False
         try:
-            state = render_backend_state(
-                stream=sys.stdout,
-                size_provider=terminal_size,
-                notebook=_running_in_notebook_environment(),
-            )
+            state = self._render_backend_state(backend_state)
         except Exception:
             return False
-        return state.supports_cursor
+        if style_enabled is None:
+            style_enabled = state.supports_styling
+        return bool(style_enabled) and (state.supports_cursor or state.notebook)
 
     def __bool__(self):
         if self.iterable is None:
@@ -1143,9 +1193,17 @@ class RollingProgressBar(ProgressBar):
     def _render_position(self) -> int:
         return self._phase
 
-    def _render_snapshot(self, columns: Optional[int] = None) -> str:
+    def _render_snapshot(
+        self,
+        columns: Optional[int] = None,
+        *,
+        backend_state: Optional[RenderBackendState] = None,
+        style_enabled: Optional[bool] = None,
+    ) -> str:
+        backend_state = self._render_backend_state(backend_state)
         if columns is None:
-            columns, _ = terminal_size()
+            columns = backend_state.columns
+        supports_styling = backend_state.supports_styling if style_enabled is None else bool(style_enabled)
 
         elapsed_seconds = max(0, int(time.time() - self.time))
         elapsed = str(datetime.timedelta(seconds=elapsed_seconds))
@@ -1176,7 +1234,10 @@ class RollingProgressBar(ProgressBar):
         bar_length = max(0, available_columns - pre_bar_size - log_text_width - 2) if available_columns else 0
         self.bar_length = bar_length
 
-        bar_plain, bar_rendered = self._render_animation(bar_length)
+        bar_plain, bar_rendered = self._render_animation(
+            bar_length,
+            supports_styling=supports_styling,
+        )
 
         self._last_rendered_line = self._render_line(
             bar_plain=bar_plain,
@@ -1184,11 +1245,16 @@ class RollingProgressBar(ProgressBar):
             log_text=log_text,
             pre_bar_padding=padding,
             columns=columns,
+            supports_styling=supports_styling,
+            animate_title=self._should_animate_title(
+                backend_state=backend_state,
+                style_enabled=supports_styling,
+            ),
         )
 
         return self._last_rendered_line
 
-    def _render_animation(self, bar_length: int) -> tuple[str, str]:
+    def _render_animation(self, bar_length: int, *, supports_styling: bool = True) -> tuple[str, str]:
         if bar_length <= 0:
             return "", ""
 
@@ -1215,7 +1281,7 @@ class RollingProgressBar(ProgressBar):
 
         bar_plain = ''.join(plain_chars)
 
-        if not (self._style.fill_colors or self._style.head_color or self._style.empty_color):
+        if not supports_styling or not (self._style.fill_colors or self._style.head_color or self._style.empty_color):
             return bar_plain, bar_plain
 
         segments: list[str] = []

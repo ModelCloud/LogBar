@@ -4,7 +4,6 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import builtins
-import html
 import logging
 import os
 import sys
@@ -16,7 +15,7 @@ from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 from .terminal import RenderBackendState, render_backend_state, terminal_size
 from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
-from .drawing import strip_ansi, visible_length
+from .drawing import ansi_to_html, strip_ansi, visible_length
 
 # global static/shared logger instance
 logger = None
@@ -106,6 +105,14 @@ def _stdout_supports_cursor_movement() -> bool:
     return state.supports_cursor
 
 
+def _stdout_supports_ansi() -> bool:
+    try:
+        state = _current_render_backend_state()
+    except Exception:  # pragma: no cover - keep rendering alive on odd stdouts
+        return False
+    return state.supports_ansi
+
+
 def _notebook_render_stack(lines: Sequence[str]) -> bool:
     """Render the stack using IPython display machinery when available."""
 
@@ -120,12 +127,13 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
         return False
 
     text = '\n'.join(lines) if lines else ''
+    plain_text = strip_ansi(text)
     payload = {
-        'text/plain': text,
+        'text/plain': plain_text,
         'text/html': (
             '<pre style="margin:0; white-space:pre; '
             'font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">'
-            f'{html.escape(strip_ansi(text))}'
+            f'{ansi_to_html(text)}'
             '</pre>'
         ),
     }
@@ -166,10 +174,13 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
     return True
 
 
-def _notebook_render_plain_stdout(lines: Sequence[str]) -> None:
+def _notebook_render_plain_stdout(lines: Sequence[str], *, strip_styles: bool = False) -> None:
     """Fallback notebook-friendly rendering using carriage returns only."""
 
     global _notebook_plain_last_line
+
+    if strip_styles:
+        lines = [strip_ansi(line) for line in lines]
 
     if not lines:
         if _notebook_plain_last_line is not None:
@@ -302,12 +313,19 @@ def mark_progress_bar_dirty(pb: "ProgressBar") -> None:
         _record_progress_activity_locked()
 
 
-def _set_cursor_visibility_locked(visible: bool) -> None:
+def _set_cursor_visibility_locked(visible: bool, backend_state: Optional[RenderBackendState] = None) -> None:
     """Toggle the terminal cursor visibility, avoiding redundant writes."""
 
     global _cursor_hidden
 
-    if not _stdout_supports_cursor_movement():
+    state = backend_state
+    if state is None:
+        try:
+            state = _current_render_backend_state()
+        except Exception:  # pragma: no cover - keep rendering alive on odd stdouts
+            state = None
+
+    if state is None or not state.supports_cursor:
         _cursor_hidden = False
         return
 
@@ -334,7 +352,7 @@ def _clear_progress_stack_locked(
 
     if not supports_cursor:
         if not _notebook_render_stack([]):
-            _notebook_render_plain_stdout([])
+            _notebook_render_plain_stdout([], strip_styles=state.notebook)
         _last_drawn_progress_count = 0
         _last_rendered_terminal_size = None
         _last_rendered_progress_lines = []
@@ -342,7 +360,7 @@ def _clear_progress_stack_locked(
         _cursor_positioned_on_stack_top = False
         _stack_redraw_invalidated = False
         if show_cursor:
-            _set_cursor_visibility_locked(True)
+            _set_cursor_visibility_locked(True, backend_state=state)
         if not for_log_output:
             _flush_deferred_logs_locked()
         return
@@ -354,7 +372,7 @@ def _clear_progress_stack_locked(
         _cursor_positioned_on_stack_top = False
         _stack_redraw_invalidated = False
         if show_cursor:
-            _set_cursor_visibility_locked(True)
+            _set_cursor_visibility_locked(True, backend_state=state)
         if not for_log_output:
             _flush_deferred_logs_locked()
         return
@@ -391,7 +409,7 @@ def _clear_progress_stack_locked(
     _cursor_positioned_on_stack_top = False
     _stack_redraw_invalidated = False
     if show_cursor:
-        _set_cursor_visibility_locked(True)
+        _set_cursor_visibility_locked(True, backend_state=state)
     if not for_log_output:
         _flush_deferred_logs_locked()
 
@@ -431,6 +449,33 @@ def clear_progress_stack(lock_held: bool = False, backend_state: Optional[Render
 def _active_progress_bars() -> list["ProgressBar"]:
     with _STATE_LOCK:
         return list(_attached_progress_bars)
+
+
+def _call_resolve_rendered_line(
+    resolve_rendered,
+    columns: int,
+    *,
+    force: bool,
+    allow_repeat: bool,
+    backend_state: RenderBackendState,
+) -> Optional[str]:
+    try:
+        return resolve_rendered(
+            columns,
+            force=force,
+            allow_repeat=allow_repeat,
+            backend_state=backend_state,
+            style_enabled=backend_state.supports_styling,
+        )
+    except TypeError as exc:
+        message = str(exc)
+        if "backend_state" not in message and "style_enabled" not in message:
+            raise
+        return resolve_rendered(
+            columns,
+            force=force,
+            allow_repeat=allow_repeat,
+        )
 
 
 def _render_progress_stack_locked(
@@ -473,10 +518,12 @@ def _render_progress_stack_locked(
                 if not should_refresh and pb._last_rendered_line:
                     rendered = pb._last_rendered_line
                 elif callable(resolve_rendered):
-                    rendered = resolve_rendered(
+                    rendered = _call_resolve_rendered_line(
+                        resolve_rendered,
                         columns,
                         force=size_changed,
                         allow_repeat=(size_changed or pb in dirty_bars),
+                        backend_state=state,
                     )
                     if rendered is None:
                         rendered = pb._last_rendered_line or ""
@@ -501,7 +548,7 @@ def _render_progress_stack_locked(
     if not supports_cursor:
         handled = _notebook_render_stack(lines)
         if not handled:
-            _notebook_render_plain_stdout(lines)
+            _notebook_render_plain_stdout(lines, strip_styles=state.notebook)
             _flush_stream()
         with _STATE_LOCK:
             _dirty_progress_bars.difference_update(bars)
@@ -511,7 +558,7 @@ def _render_progress_stack_locked(
         _cursor_positioned_above_stack = False
         _cursor_positioned_on_stack_top = False
         _stack_redraw_invalidated = False
-        _set_cursor_visibility_locked(True)
+        _set_cursor_visibility_locked(True, backend_state=state)
         _record_progress_activity_locked()
         return
 
@@ -565,7 +612,7 @@ def _render_progress_stack_locked(
         _last_rendered_progress_lines = list(lines)
         _set_stack_cursor_anchor(len(lines), terminal_rows)
         _stack_redraw_invalidated = False
-        _set_cursor_visibility_locked(False)
+        _set_cursor_visibility_locked(False, backend_state=state)
         with _STATE_LOCK:
             _dirty_progress_bars.difference_update(bars)
         _record_progress_activity_locked()
@@ -592,7 +639,7 @@ def _render_progress_stack_locked(
         _last_rendered_progress_lines = list(lines)
         _set_stack_cursor_anchor(len(lines), terminal_rows)
         _stack_redraw_invalidated = False
-        _set_cursor_visibility_locked(False)
+        _set_cursor_visibility_locked(False, backend_state=state)
         with _STATE_LOCK:
             _dirty_progress_bars.difference_update(bars)
         _record_progress_activity_locked()
@@ -621,7 +668,7 @@ def _render_progress_stack_locked(
         _last_rendered_progress_lines = []
         _cursor_positioned_above_stack = False
         _stack_redraw_invalidated = False
-        _set_cursor_visibility_locked(True)
+        _set_cursor_visibility_locked(True, backend_state=state)
         with _STATE_LOCK:
             _dirty_progress_bars.difference_update(bars)
         _record_progress_activity_locked()
@@ -647,7 +694,7 @@ def _render_progress_stack_locked(
     _last_rendered_progress_lines = list(lines)
     _set_stack_cursor_anchor(len(lines), terminal_rows)
     _stack_redraw_invalidated = False
-    _set_cursor_visibility_locked(False)
+    _set_cursor_visibility_locked(False, backend_state=state)
     with _STATE_LOCK:
         _dirty_progress_bars.difference_update(bars)
     _record_progress_activity_locked()
@@ -724,10 +771,12 @@ def _progress_refresh_worker() -> None:
 
                 resolve_rendered = getattr(pb, "_resolve_rendered_line", None)
                 if callable(resolve_rendered):
-                    rendered = resolve_rendered(
+                    rendered = _call_resolve_rendered_line(
+                        resolve_rendered,
                         state.columns,
                         force=True,
                         allow_repeat=True,
+                        backend_state=state,
                     )
                     precomputed[pb] = rendered if rendered is not None else (pb._last_rendered_line or "")
 
@@ -1100,10 +1149,13 @@ class LogBar(logging.Logger):
         str_msg: str,
         *,
         allow_defer: bool = True,
+        backend_state: Optional[RenderBackendState] = None,
     ) -> None:
         global last_rendered_length, _cursor_positioned_above_stack, _deferred_log_records
 
-        columns, terminal_rows = terminal_size()
+        backend_state = backend_state or _current_render_backend_state()
+        columns = backend_state.columns
+        terminal_rows = backend_state.lines
         level_width = max(LEVEL_MAX_LENGTH, len(level_label))
 
         with _STATE_LOCK:
@@ -1129,8 +1181,12 @@ class LogBar(logging.Logger):
         if not stacked_log_insert:
             _clear_progress_stack_locked(for_log_output=True)
 
-        reset = COLORS["RESET"]
-        color = COLORS.get(level_label, reset)
+        if backend_state.supports_ansi:
+            reset = COLORS["RESET"]
+            color = COLORS.get(level_label, reset)
+        else:
+            reset = ""
+            color = ""
         level_padding = " " * (level_width - len(level_label))
         _print(f"\r{color}{level_label}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
 
@@ -1142,7 +1198,7 @@ class LogBar(logging.Logger):
             _flush_stream()
             _cursor_positioned_above_stack = True
 
-        _render_progress_stack_locked()
+        _render_progress_stack_locked(backend_state=backend_state)
 
     def _process(self, level: Union[LEVEL, int, str], msg, *args, **kwargs):
         normalized_level = self._normalize_level(level)
@@ -1153,7 +1209,8 @@ class LogBar(logging.Logger):
         str_msg = self._format_message(msg, args)
 
         with _RENDER_LOCK:
-            _, terminal_rows = terminal_size()
+            backend_state = _current_render_backend_state()
+            terminal_rows = backend_state.lines
             if _deferred_log_records and not _should_defer_log_output_locked(terminal_rows):
                 _flush_deferred_logs_locked()
 
@@ -1162,4 +1219,5 @@ class LogBar(logging.Logger):
                 level_label,
                 str_msg,
                 allow_defer=True,
+                backend_state=backend_state,
             )
