@@ -27,6 +27,8 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def extract_rendered_lines(buffer: str):
+    """Split captured terminal output into visible lines without ANSI escapes."""
+
     cleaned = ANSI_ESCAPE_RE.sub('', buffer)
     lines = []
     accumulator = []
@@ -49,6 +51,8 @@ def extract_rendered_lines(buffer: str):
     return [line for line in lines if line]
 
 def generate_expanding_str_a_to_z():
+    """Build a grow-then-shrink sample set for dynamic title tests."""
+
     strings = []
 
     # Loop through the alphabet from 'A' to 'Z'
@@ -70,7 +74,11 @@ SAMPLES = generate_expanding_str_a_to_z()
 REVERSED_SAMPLES = reversed(SAMPLES)
 
 class TestProgress(unittest.TestCase):
+    """Coverage for determinate and indeterminate progress rendering."""
+
     def setUp(self):
+        """Reset environment-driven progress settings before each test."""
+
         self._saved_env = {
             "LOGBAR_ANIMATION": os.environ.get("LOGBAR_ANIMATION"),
             "LOGBAR_PROGRESS_OUTPUT_INTERVAL": os.environ.get("LOGBAR_PROGRESS_OUTPUT_INTERVAL"),
@@ -82,6 +90,8 @@ class TestProgress(unittest.TestCase):
         self._clear_progress_env_caches()
 
     def tearDown(self):
+        """Restore environment-driven progress settings after each test."""
+
         for key, value in self._saved_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -92,6 +102,8 @@ class TestProgress(unittest.TestCase):
 
     @staticmethod
     def _clear_progress_env_caches():
+        """Clear cached environment readers so patched env vars take effect."""
+
         for helper_name in ("_env_animation_enabled", "_env_progress_output_interval"):
             helper = getattr(progress_module, helper_name, None)
             cache_clear = getattr(helper, "cache_clear", None)
@@ -99,18 +111,24 @@ class TestProgress(unittest.TestCase):
                 cache_clear()
 
     def test_title_fixed_subtitle_dynamic(self):
+        """Allow a stable title with a subtitle that changes every frame."""
+
         pb = log.pb(SAMPLES).title("TITLE:").manual()
         for i in pb:
             pb.subtitle(f"[SUBTITLE: {i}]").draw()
             sleep(0.1)
 
     def test_title_dynamic_subtitle_fixed(self):
+        """Allow a dynamic title while keeping the subtitle constant."""
+
         pb = log.pb(SAMPLES).subtitle("SUBTITLE: FIXED").manual()
         for i in pb:
             pb.title(f"[TITLE: {i}]").draw()
             sleep(0.1)
 
     def test_title_dynamic_subtitle_dynamic(self):
+        """Support updating both title and subtitle during manual redraws."""
+
         pb = log.pb(SAMPLES).manual()
         count = 1
         for i in pb:
@@ -120,39 +138,53 @@ class TestProgress(unittest.TestCase):
             sleep(0.1)
 
     def test_range_manual(self):
+        """Render a determinate bar manually over a numeric range."""
+
         pb = log.pb(range(100)).manual()
         for _ in pb:
             pb.draw()
             sleep(0.1)
 
     def test_range_auto_int(self):
+        """Auto-expand integer totals into ranges for automatic rendering."""
+
         pb = log.pb(100)
         for _ in pb:
             sleep(0.1)
 
     def test_range_auto_dict(self):
+        """Iterate mapping inputs through the convenience iterable adapter."""
+
         pb = log.pb({"1": 2, "2": 2})
 
         for _ in pb:
             sleep(0.1)
 
     def test_range_auto_disable_ui_left_steps(self):
+        """Allow the left-side step label to be disabled."""
+
         pb = log.pb(100).set(show_left_steps=False)
         for _ in pb:
             sleep(0.1)
 
     def test_title(self):
+        """Render a fixed title in automatic mode."""
+
         pb = log.pb(100).title("TITLE: FIXED")
         for _ in pb:
             sleep(0.1)
 
     def test_title_subtitle(self):
+        """Render title and subtitle together in manual mode."""
+
         pb = log.pb(100).title("[TITLE: FIXED]").manual()
         for _ in pb:
             pb.subtitle(f"[SUBTITLE: FIXED]").draw()
             sleep(0.1)
 
     def test_title_animation_skips_ansi_sequences(self):
+        """Animate visible title cells instead of ANSI escape bytes."""
+
         pb = log.pb(1).manual()
         ansi_title = "\033[31mRed\033[0mBlue"
         pb.title(ansi_title)
@@ -169,7 +201,28 @@ class TestProgress(unittest.TestCase):
         with redirect_stdout(StringIO()):
             pb.close()
 
+    def test_title_animation_keeps_zwj_clusters_atomic(self):
+        """Animate ZWJ emoji families as a single visible grapheme."""
+
+        pb = log.pb(1).manual()
+        title = "A👨‍👩‍👧‍👦B"
+        pb.title(title)
+        pb._title_animation_period = 0.1
+        pb._title_animation_start = 100.0
+
+        with patch('logbar.progress.time.time', return_value=100.2):
+            animated = pb._animated_text(title)
+
+        match = re.search(re.escape(TITLE_HIGHLIGHT_COLOR) + r"(.*?)" + re.escape(ANSI_BOLD_RESET), animated)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "👨‍👩‍👧‍👦")
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
     def test_title_animation_respects_logbar_animation_env(self):
+        """Honor the global environment switch for title animation."""
+
         script = (
             "from types import SimpleNamespace\n"
             "import sys\n"
@@ -200,6 +253,8 @@ class TestProgress(unittest.TestCase):
         self.assertEqual(disabled.stdout.strip(), "0")
 
     def test_progress_output_interval_respects_env(self):
+        """Seed new progress bars from the global output-interval env var."""
+
         cache_clear = progress_module._env_progress_output_interval.cache_clear
 
         with patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10"}):
@@ -212,6 +267,8 @@ class TestProgress(unittest.TestCase):
         cache_clear()
 
     def test_progress_output_interval_defaults_to_one(self):
+        """Default progress output throttling to one logical step."""
+
         cache_clear = progress_module._env_progress_output_interval.cache_clear
 
         with patch.dict(os.environ, {}, clear=True):
@@ -224,6 +281,8 @@ class TestProgress(unittest.TestCase):
         cache_clear()
 
     def test_progress_output_interval_skips_intermediate_draws_but_flushes_final_step(self):
+        """Skip intermediate frames while still forcing the final 100% snapshot."""
+
         columns = 96
 
         with patch('logbar.progress.terminal_size', return_value=(columns, 24)), \
@@ -246,6 +305,8 @@ class TestProgress(unittest.TestCase):
         self.assertFalse(any("[14/15]" in line for line in progress_lines))
 
     def test_draw_respects_terminal_width(self):
+        """Pad or truncate the rendered line to the detected terminal width."""
+
         pb = log.pb(100).title("TITLE").subtitle("SUBTITLE").manual()
         pb.current_iter_step = 50
 
@@ -263,6 +324,8 @@ class TestProgress(unittest.TestCase):
             pb.close()
 
     def test_draw_respects_terminal_width_with_ansi_title_subtitle(self):
+        """Measure ANSI-decorated titles by visible width, not raw byte length."""
+
         pb = log.pb(100).title("\033[31mTITLE\033[0m").subtitle("\033[32mSUB\033[0m").manual()
         pb.current_iter_step = 50
 
@@ -280,6 +343,8 @@ class TestProgress(unittest.TestCase):
             pb.close()
 
     def test_time_estimate_accounts_for_last_item(self):
+        """Estimate total time from completed work even on the final item."""
+
         pb = ProgressBar(range(3))
         pb.current_iter_step = 3
         pb.time = 0
@@ -290,6 +355,8 @@ class TestProgress(unittest.TestCase):
         elapsed_str, total_str = [part.strip() for part in estimate.split("/", 1)]
 
         def to_seconds(value: str) -> int:
+            """Normalize clock strings into seconds for easy comparison."""
+
             parts = [int(part) for part in value.split(":")]
             if len(parts) == 3:
                 hours, minutes, seconds = parts
@@ -305,6 +372,8 @@ class TestProgress(unittest.TestCase):
         self.assertGreater(to_seconds(total_str), to_seconds(elapsed_str))
 
     def test_draw_without_terminal_state(self):
+        """Keep progress rendering alive when terminal size probing fails."""
+
         pb = log.pb(10).manual()
         pb.current_iter_step = 5
 
@@ -321,6 +390,8 @@ class TestProgress(unittest.TestCase):
             pb.close()
 
     def test_progress_bars_stack_latest_bottom(self):
+        """Keep later-attached bars rendered below earlier bars in the stack."""
+
         columns = 80
         pb1 = log.pb(100).title("PB1").manual()
         pb2 = log.pb(100).title("PB2").manual()
@@ -354,6 +425,8 @@ class TestProgress(unittest.TestCase):
             pb1.close()
 
     def test_detach_tolerates_missing_runtime_dependencies(self):
+        """Detach bars safely across degraded runtime and finalization paths."""
+
         from logbar import progress as progress_module
 
         pb = log.pb(range(5)).manual()
@@ -378,6 +451,8 @@ class TestProgress(unittest.TestCase):
         self.assertTrue(pb_nonfinal._attached)
 
         def boom_detach(*args, **kwargs):
+            """Simulate a detach implementation that always fails."""
+
             raise RuntimeError("boom")
 
         with patch.object(progress_module, "detach_progress_bar", new=boom_detach):
@@ -408,6 +483,8 @@ class TestProgress(unittest.TestCase):
         self.assertNotIn(pb_final, _active_progress_bars())
 
     def test_notebook_stack_uses_display_updates(self):
+        """Render notebook stacks through IPython display updates when available."""
+
         pb = log.pb(5).title("NB").manual()
         pb.current_iter_step = 3
 
@@ -423,15 +500,23 @@ class TestProgress(unittest.TestCase):
         updates = []
 
         class StubHandle:
+            """Minimal IPython display handle used by the notebook test."""
+
             def update(self, payload, raw=False):
-                updates.append(('update', payload['text/plain'], raw))
+                """Record update payloads and mimic the display handle contract."""
+
+                updates.append(('update', payload, raw))
                 return self
 
             def close(self):
+                """Record handle closure for notebook teardown assertions."""
+
                 updates.append(('close', '', None))
 
         def stub_display(payload, raw=False, display_id=False):
-            updates.append(('display', payload['text/plain'], raw))
+            """Capture the first notebook display payload and return a stub handle."""
+
+            updates.append(('display', payload, raw))
             self.assertTrue(raw)
             self.assertTrue(display_id)
             return StubHandle()
@@ -439,6 +524,8 @@ class TestProgress(unittest.TestCase):
         logbar_module._notebook_display_handle = None
 
         with patch('logbar.logbar._running_in_notebook_environment', return_value=True), \
+             patch('logbar.progress._running_in_notebook_environment', return_value=True), \
+             patch.dict('logbar.terminal.os.environ', {}, clear=True), \
              patch.object(ip_display, 'display', side_effect=stub_display):
             buffer = StringIO()
             with redirect_stdout(buffer):
@@ -448,13 +535,48 @@ class TestProgress(unittest.TestCase):
         self.assertGreaterEqual(len(updates), 2)
         initial = updates[0][1]
         repeat = updates[-1][1]
-        self.assertIn('NB', initial)
+        self.assertIn('text/plain', initial)
+        self.assertIn('text/html', initial)
+        self.assertIn('NB', initial['text/plain'])
+        self.assertIn('[3 of 5]', initial['text/html'])
+        self.assertIn('<pre', initial['text/html'])
+        self.assertIn('<span style=', initial['text/html'])
+        self.assertNotIn('\033[', initial['text/plain'])
         self.assertEqual(initial, repeat)
 
         with redirect_stdout(StringIO()):
             pb.close()
 
+    def test_progress_draw_reuses_backend_state_within_a_frame(self):
+        """Avoid repeated backend detection during a single draw call."""
+
+        pb = ProgressBar(range(10))
+        pb.manual()
+        pb.current_iter_step = 5
+
+        original = progress_module.render_backend_state
+        calls = []
+
+        def counting_backend_state(*args, **kwargs):
+            """Count backend-state probes while delegating to the real helper."""
+
+            calls.append((args, kwargs))
+            return original(*args, **kwargs)
+
+        with patch('logbar.progress.render_backend_state', side_effect=counting_backend_state), \
+             patch('logbar.progress.terminal_size', return_value=(48, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        self.assertEqual(len(calls), 1)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
     def test_log_messages_render_above_progress_bars(self):
+        """Keep normal log lines visually above the active progress stack."""
+
         columns = 100
         pb = log.pb(100).title("PB").manual()
         pb.current_iter_step = 10
@@ -478,7 +600,48 @@ class TestProgress(unittest.TestCase):
         with redirect_stdout(StringIO()):
             pb.close()
 
+    def test_progress_draw_plain_stream_omits_ansi_sequences(self):
+        """Suppress ANSI styling when drawing to plain redirected stdout."""
+
+        pb = log.pb(10).title("PB").manual()
+        pb.current_iter_step = 5
+
+        with patch.dict('logbar.terminal.os.environ', {}, clear=True), \
+             patch('logbar.progress.terminal_size', return_value=(48, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        raw = buffer.getvalue()
+        self.assertIn('PB', raw)
+        self.assertNotIn('\033[', raw)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
+    def test_progress_draw_plain_stream_strips_ansi_title_and_subtitle(self):
+        """Strip ANSI from title and subtitle when rendering to plain streams."""
+
+        pb = log.pb(10).title("\033[31mPB\033[0m").subtitle("\033[32mSUB\033[0m").manual()
+        pb.current_iter_step = 5
+
+        with patch.dict('logbar.terminal.os.environ', {}, clear=True), \
+             patch('logbar.progress.terminal_size', return_value=(48, 24)):
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                pb.draw()
+
+        raw = buffer.getvalue()
+        self.assertIn('PB', raw)
+        self.assertIn('SUB', raw)
+        self.assertNotIn('\033[', raw)
+
+        with redirect_stdout(StringIO()):
+            pb.close()
+
     def test_progress_bar_attach_detach_random_session(self):
+        """Stress attach, draw, detach, and logging over a mixed random session."""
+
         rng = random.Random(1337)
         duration = 10.0
         detach_interval = 1.0
@@ -535,6 +698,8 @@ class TestProgress(unittest.TestCase):
         self.assertEqual(_active_progress_bars(), [])
 
     def test_spinner_progress_auto_updates(self):
+        """Advance spinner animation frames through the shared refresh worker."""
+
         pb = log.spinner(title="Working", interval=0.1)
         start = time.time()
         last_line = ""
@@ -552,6 +717,8 @@ class TestProgress(unittest.TestCase):
         self.assertIn('elapsed', last_line)
 
     def test_spinner_progress_pulse_advances_frame(self):
+        """Let explicit `pulse()` calls advance spinner animation immediately."""
+
         pb = log.spinner(title="Pulse", interval=10.0, tail_length=2)
         initial_phase = pb._phase
         start = time.time()

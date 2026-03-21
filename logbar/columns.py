@@ -14,6 +14,8 @@ from .terminal import terminal_size
 
 
 def _pad_visible(text: str, target: int) -> str:
+    """Pad text to a target rendered width while ignoring ANSI escapes."""
+
     current = _visible_length(text)
     if current >= target:
         return text
@@ -22,11 +24,15 @@ def _pad_visible(text: str, target: int) -> str:
 
 @dataclass
 class ColumnSpec:
+    """Describe one logical column, including span and optional width hint."""
+
     label: str
     span: int = 1
     width: Optional[Tuple[str, float]] = None
 
     def __post_init__(self) -> None:
+        """Clamp invalid spans so downstream layout math always has >= 1 slot."""
+
         if self.span < 1:
             self.span = 1
 
@@ -38,19 +44,29 @@ class ColumnsPrinter:
         """Expose level-specific helpers such as `cols.info.header()`."""
 
         def __init__(self, printer: "ColumnsPrinter", level: Any) -> None:
+            """Bind one logging level to a `ColumnsPrinter` view."""
+
             self._printer = printer
             self._level = level
 
         def __call__(self, *values: Any) -> str:
+            """Render and emit a row for the bound logging level."""
+
             return self._printer._log_values(self._level, values)
 
         def simulate(self, *values: Any) -> None:
+            """Update width calculations without printing a row."""
+
             self._printer._simulate_values(self._level, values)
 
         def header(self) -> str:
+            """Emit the header row and borders for the bound level."""
+
             return self._printer._log_header(self._level)
 
         def headers(self) -> str:
+            """Alias `header()` for compatibility with older call sites."""
+
             return self.header()
 
     def __init__(
@@ -64,6 +80,8 @@ class ColumnsPrinter:
         level_max_length: int,
         terminal_size_provider: Optional[Callable[[], Tuple[int, int]]] = None,
     ) -> None:
+        """Create a column printer bound to a logger and initial layout hints."""
+
         self._logger = logger
         self._padding = max(padding, 0)
         self._columns: List[ColumnSpec] = []
@@ -83,17 +101,25 @@ class ColumnsPrinter:
 
     @property
     def widths(self) -> List[int]:
+        """Return a copy of the current slot widths."""
+
         return list(self._slot_widths)
 
     @property
     def padding(self) -> int:
+        """Return the configured horizontal padding per slot side."""
+
         return self._padding
 
     @property
     def column_specs(self) -> List[ColumnSpec]:
+        """Return a defensive copy of the logical column definitions."""
+
         return [ColumnSpec(spec.label, spec.span, spec.width) for spec in self._columns]
 
     def width(self, width: Optional[Union[str, int, float]] = None):
+        """Return the currently resolved table width including separators."""
+
         if width is not None:
             raise TypeError(
                 "ColumnsPrinter.width no longer accepts arguments; use ColumnsPrinter.update instead."
@@ -109,6 +135,8 @@ class ColumnsPrinter:
         return self._get_target_width() + separator_count
 
     def update(self, updates: Dict[str, Dict[str, Any]]):
+        """Mutate existing columns by label and recompute the layout."""
+
         if not updates:
             return self
 
@@ -148,31 +176,45 @@ class ColumnsPrinter:
         return self
 
     def _level_proxy(self, level: Any) -> "ColumnsPrinter._LevelProxy":
+        """Cache and return the per-level helper object."""
+
         if level not in self._level_proxies:
             self._level_proxies[level] = ColumnsPrinter._LevelProxy(self, level)
         return self._level_proxies[level]
 
     @property
     def debug(self) -> "ColumnsPrinter._LevelProxy":
+        """Expose `DEBUG` column logging helpers."""
+
         return self._level_proxy(self._level_enum.DEBUG)
 
     @property
     def info(self) -> "ColumnsPrinter._LevelProxy":
+        """Expose `INFO` column logging helpers."""
+
         return self._level_proxy(self._level_enum.INFO)
 
     @property
     def warn(self) -> "ColumnsPrinter._LevelProxy":
+        """Expose `WARN` column logging helpers."""
+
         return self._level_proxy(self._level_enum.WARN)
 
     @property
     def error(self) -> "ColumnsPrinter._LevelProxy":
+        """Expose `ERROR` column logging helpers."""
+
         return self._level_proxy(self._level_enum.ERROR)
 
     @property
     def critical(self) -> "ColumnsPrinter._LevelProxy":
+        """Expose `CRITICAL` column logging helpers."""
+
         return self._level_proxy(self._level_enum.CRITICAL)
 
     def _log_header(self, level: Any) -> str:
+        """Emit the bordered header block for the current columns."""
+
         if not self._columns:
             return ""
 
@@ -184,6 +226,8 @@ class ColumnsPrinter:
         return row
 
     def _log_values(self, level: Any, values: Iterable) -> str:
+        """Emit one bordered row after updating column widths from the values."""
+
         values_list = self._prepare_values(values)
         self._update_slot_widths(values_list)
         self._emit_border(level)
@@ -193,16 +237,22 @@ class ColumnsPrinter:
         return row
 
     def _simulate_values(self, level: Any, values: Iterable) -> None:
+        """Update width state as if a row were rendered, without output."""
+
         values_list = self._prepare_values(values)
         self._update_slot_widths(values_list)
 
     def _set_columns(self, headers: Sequence) -> None:
+        """Replace the logical column definitions and rebuild layout state."""
+
         self._columns = [self._normalize_column(entry) for entry in headers]
         self._recompute_layout()
         self._apply_initial_widths()
         self._apply_header_widths()
 
     def _normalize_column(self, entry) -> ColumnSpec:
+        """Coerce user input into a normalized `ColumnSpec`."""
+
         if isinstance(entry, ColumnSpec):
             label = entry.label
             span = entry.span
@@ -228,6 +278,8 @@ class ColumnsPrinter:
         return ColumnSpec(label=label, span=max(1, int(span)), width=width_hint)
 
     def _recompute_layout(self) -> None:
+        """Rebuild slot bookkeeping after the column spec list changes."""
+
         starts: List[int] = []
         idx = 0
         for spec in self._columns:
@@ -247,6 +299,8 @@ class ColumnsPrinter:
             self._slot_padding = self._slot_padding[:slot_count]
 
     def _parse_width_hint(self, value: Optional[Union[str, int, float]]) -> Optional[Tuple[str, float]]:
+        """Normalize width hints such as `fit`, percentages, or fixed chars."""
+
         if value is None:
             return None
 
@@ -281,6 +335,8 @@ class ColumnsPrinter:
         return None
 
     def _minimal_width(self) -> int:
+        """Return the smallest bordered width that can fit the headers."""
+
         if not self._columns:
             return 0
         slot_count = sum(spec.span for spec in self._columns)
@@ -294,6 +350,8 @@ class ColumnsPrinter:
         return base_labels + padding_total + separators + inter_column_gaps
 
     def _get_target_width(self) -> int:
+        """Resolve the desired content width from hints and terminal size."""
+
         hint = self._target_width_hint
         term_cols, _ = self._terminal_size()
         if term_cols <= 0:
@@ -328,6 +386,8 @@ class ColumnsPrinter:
         return max(target_cells, minimal_cells)
 
     def _apply_initial_widths(self) -> None:
+        """Seed slot widths from hints, then distribute any remaining space."""
+
         slot_count = self._slot_count()
         if slot_count == 0:
             return
@@ -384,6 +444,8 @@ class ColumnsPrinter:
         self._current_total_width = current_total + separator_count
 
     def _resolve_width_hint(self, hint: Optional[Tuple[str, float]], total_width: int) -> Optional[int]:
+        """Convert a parsed width hint into an absolute character width."""
+
         if not hint:
             return None
         if hint[0] == "percent":
@@ -391,6 +453,8 @@ class ColumnsPrinter:
         return max(0, int(hint[1]))
 
     def _configure_column_width(self, col_idx: int, target: Optional[int]) -> None:
+        """Apply an absolute width target across all slots in one column span."""
+
         start = self._spec_starts[col_idx]
         span = self._columns[col_idx].span
         if span <= 0:
@@ -417,6 +481,8 @@ class ColumnsPrinter:
                     break
 
     def _grow_column(self, col_idx: int, amount: int) -> None:
+        """Expand a column span by distributing width across its slots."""
+
         if amount <= 0:
             return
         start = self._spec_starts[col_idx]
@@ -432,6 +498,8 @@ class ColumnsPrinter:
                     break
 
     def _column_total_width(self, col_idx: int) -> int:
+        """Return the full rendered width of one logical column."""
+
         start = self._spec_starts[col_idx]
         span = self._columns[col_idx].span
         total = 0
@@ -444,9 +512,13 @@ class ColumnsPrinter:
         return total
 
     def _slot_count(self) -> int:
+        """Return the number of physical slots in the current layout."""
+
         return len(self._slot_widths)
 
     def _ensure_slots(self, count: int) -> None:
+        """Grow the layout so incoming rows have enough physical slots."""
+
         if count <= self._slot_count():
             return
 
@@ -462,6 +534,8 @@ class ColumnsPrinter:
         self._apply_header_widths()
 
     def _apply_header_widths(self) -> None:
+        """Ensure each header label fits within its spanned slots."""
+
         if not self._columns:
             return
 
@@ -493,6 +567,8 @@ class ColumnsPrinter:
                 self._slot_widths[start] += deficit
 
     def _prepare_values(self, values: Iterable) -> List[str]:
+        """Normalize row values to strings and match the active slot count."""
+
         values_list = [str(value) for value in values]
         self._ensure_slots(len(values_list))
         slot_count = self._slot_count()
@@ -503,6 +579,8 @@ class ColumnsPrinter:
         return values_list
 
     def _update_slot_widths(self, values: Iterable[str]) -> None:
+        """Grow slot widths to accommodate the rendered value widths."""
+
         for idx, value in enumerate(values):
             if idx >= len(self._slot_widths):
                 break
@@ -511,6 +589,8 @@ class ColumnsPrinter:
                 self._slot_widths[idx] = current
 
     def _render_header(self) -> str:
+        """Build the visible header row with current widths and padding."""
+
         cells: List[str] = []
 
         for idx, spec in enumerate(self._columns):
@@ -531,6 +611,8 @@ class ColumnsPrinter:
         return "|" + "|".join(cells) + "|"
 
     def _render_row(self, values: Iterable[str]) -> str:
+        """Build one bordered data row using the current slot widths."""
+
         values_list = [str(value) for value in values]
         slot_count = self._slot_count()
 
@@ -550,10 +632,14 @@ class ColumnsPrinter:
         return "|" + "|".join(cells) + "|"
 
     def _print_row(self, level: Any, row: str) -> None:
+        """Send a fully rendered row to the owning logger."""
+
         self._last_was_border = False
         self._logger._process(level, row)
 
     def _emit_border(self, level: Any, force: bool = False) -> None:
+        """Emit the top or bottom border, coalescing repeated borders."""
+
         if not self._slot_widths:
             return
 

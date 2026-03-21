@@ -9,7 +9,11 @@ from logbar import LogBar
 
 
 class TestExample(unittest.TestCase):
+    """Smoke test the basic multi-progress example flow."""
+
     def test_example(self):
+        """Run two manual progress bars sequentially without crashing."""
+
         log = LogBar.shared()
 
         pb_fetch = log.pb(range(80)).title("Fetch").manual()
