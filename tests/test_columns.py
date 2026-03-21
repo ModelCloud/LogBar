@@ -19,11 +19,15 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _clean(value: str) -> str:
+    """Strip ANSI color and carriage-return noise from captured output."""
+
     cleaned = ANSI_RE.sub("", value)
     return cleaned.replace('\r', '')
 
 
 def test_columns_auto_expand(capsys):
+    """Grow slot widths and trailing spans as wider rows arrive."""
+
     cols = log.columns(cols=({"label": "name", "span": 2}, "age", "school"))
 
     longest_name = "Johhhhhhhhhhh"
@@ -88,11 +92,15 @@ def test_columns_auto_expand(capsys):
 
 
 def test_columns_reject_tuple_entries():
+    """Reject tuple shorthand that is not part of the supported column API."""
+
     with pytest.raises(TypeError):
         log.columns(cols=(("name", 2), "age"))
 
 
 def test_columns_simulate_updates_width_without_output():
+    """Allow width probes to mutate layout without printing a row."""
+
     cols = log.columns(cols=("name", "details"))
 
     long_value = "longer than anything real"
@@ -109,6 +117,8 @@ def test_columns_simulate_updates_width_without_output():
 
 
 def test_columns_support_other_levels(capsys):
+    """Expose the same table helpers across debug, warn, error, and critical."""
+
     cols = log.columns(cols=("name", "age"))
     previous_level = log.level
     log.setLevel("DEBUG")
@@ -165,6 +175,8 @@ def test_columns_support_other_levels(capsys):
 
 
 def test_columns_initial_width_distribution(capsys):
+    """Apply percentage hints before rendering the first header."""
+
     cols = log.columns(cols=({"label": "name", "span": 2, "width": "10%"}, "school"), width="50%")
 
     buffer = io.StringIO()
@@ -192,12 +204,16 @@ def test_columns_initial_width_distribution(capsys):
 
 
 def test_columns_width_setter_removed():
+    """Keep the old width-setter call path raising a clear error."""
+
     cols = log.columns(cols=("name", "age"))
     with pytest.raises(TypeError):
         cols.width("50%")
 
 
 def test_columns_respects_available_width():
+    """Keep the rendered table within the width budget derived from the terminal."""
+
     columns = 120
     with mock.patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
         cols = log.columns(cols=("c1", "c2", "c3", "c4"))
@@ -224,6 +240,8 @@ def test_columns_respects_available_width():
 
 
 def test_columns_fit_width_matches_content():
+    """Let `fit` columns shrink to the widest observed content."""
+
     cols = log.columns(cols=({"label": "tag", "width": "FiT"}, {"label": "message"}))
 
     with mock.patch('logbar.logbar.terminal_size', return_value=(100, 24)):
@@ -239,6 +257,8 @@ def test_columns_fit_width_matches_content():
 
 
 def test_columns_ignore_ansi_sequences():
+    """Measure visible cell width instead of raw ANSI-decorated string length."""
+
     cols = log.columns(cols=("name", "status"))
 
     buffer = io.StringIO()

@@ -11,7 +11,11 @@ from logbar import terminal as terminal_module
 
 
 class TestTerminal(unittest.TestCase):
+    """Coverage for terminal size probing and backend capability detection."""
+
     def test_terminal_size_prefers_stream_terminal_query(self):
+        """Prefer `os.get_terminal_size(fileno)` over the generic shutil fallback."""
+
         class StreamWithFileno:
             def fileno(self):
                 return 17
@@ -26,6 +30,8 @@ class TestTerminal(unittest.TestCase):
         self.assertEqual((columns, lines), (123, 45))
 
     def test_render_backend_state_honors_cursor_policy(self):
+        """Keep cursor support independent from notebook and TTY mode rules."""
+
         class FakeStream:
             def __init__(self, is_tty: bool):
                 self._is_tty = is_tty
@@ -60,6 +66,8 @@ class TestTerminal(unittest.TestCase):
         self.assertTrue(notebook.supports_styling)
 
     def test_render_backend_state_tracks_ansi_policy_separately(self):
+        """Allow styling, ANSI, and cursor policies to diverge when configured."""
+
         class FakeStream:
             def __init__(self, is_tty: bool):
                 self._is_tty = is_tty
