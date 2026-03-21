@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from enum import Enum
+from functools import lru_cache
 from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
 from .terminal import RenderBackendState, render_backend_state, terminal_size
@@ -25,15 +26,21 @@ _STATE_LOCK = threading.RLock()
 _RENDER_LOCK = threading.RLock()
 
 def _stdout_stream():
+    """Return the stdout stream wrapper used by all renderer writes."""
+
     return get_buffered_stdout(sys.stdout)
 
 
 def _write(data: str) -> int:
+    """Write raw text to the shared stdout wrapper."""
+
     stream = _stdout_stream()
     return stream.write(data)
 
 
 def _flush_stream() -> None:
+    """Flush the shared stdout wrapper when the backend exposes flush()."""
+
     stream = _stdout_stream()
     flush = getattr(stream, "flush", None)
     if callable(flush):
@@ -41,6 +48,8 @@ def _flush_stream() -> None:
 
 
 def _print(*args, **kwargs) -> None:
+    """Print through the shared stdout wrapper with flush enabled by default."""
+
     if "file" not in kwargs:
         kwargs["file"] = _stdout_stream()
     kwargs.setdefault("flush", True)
@@ -48,9 +57,12 @@ def _print(*args, **kwargs) -> None:
 
 _notebook_display_handle = None
 _notebook_plain_last_line: Optional[str] = None
+_notebook_plain_last_width = 0
 
 
 def _current_render_backend_state(columns_hint: Optional[int] = None) -> RenderBackendState:
+    """Capture backend capabilities and size for the current stdout target."""
+
     notebook = _running_in_notebook_environment()
 
     if columns_hint is not None:
@@ -98,6 +110,8 @@ def _running_in_notebook_environment() -> bool:
 
 
 def _stdout_supports_cursor_movement() -> bool:
+    """Best-effort check for cursor positioning support on stdout."""
+
     try:
         state = _current_render_backend_state()
     except Exception:  # pragma: no cover - keep rendering alive on odd stdouts
@@ -106,6 +120,8 @@ def _stdout_supports_cursor_movement() -> bool:
 
 
 def _stdout_supports_ansi() -> bool:
+    """Best-effort check for raw ANSI styling support on stdout."""
+
     try:
         state = _current_render_backend_state()
     except Exception:  # pragma: no cover - keep rendering alive on odd stdouts
@@ -116,7 +132,7 @@ def _stdout_supports_ansi() -> bool:
 def _notebook_render_stack(lines: Sequence[str]) -> bool:
     """Render the stack using IPython display machinery when available."""
 
-    global _notebook_display_handle
+    global _notebook_display_handle, _notebook_plain_last_line, _notebook_plain_last_width
 
     if not _running_in_notebook_environment():
         return False
@@ -167,6 +183,8 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
             except Exception:
                 pass
             _notebook_display_handle = None
+            _notebook_plain_last_line = None
+            _notebook_plain_last_width = 0
     except Exception:
         _notebook_display_handle = None
         return False
@@ -177,7 +195,7 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
 def _notebook_render_plain_stdout(lines: Sequence[str], *, strip_styles: bool = False) -> None:
     """Fallback notebook-friendly rendering using carriage returns only."""
 
-    global _notebook_plain_last_line
+    global _notebook_plain_last_line, _notebook_plain_last_width
 
     if strip_styles:
         lines = [strip_ansi(line) for line in lines]
@@ -185,23 +203,25 @@ def _notebook_render_plain_stdout(lines: Sequence[str], *, strip_styles: bool = 
     if not lines:
         if _notebook_plain_last_line is not None:
             _write('\r')
-            _write(' ' * visible_length(_notebook_plain_last_line))
+            _write(' ' * _notebook_plain_last_width)
             _write('\r')
             _flush_stream()
         _notebook_plain_last_line = None
+        _notebook_plain_last_width = 0
         return
 
     joined = '\n'.join(lines)
 
     if len(lines) == 1:
-        previous = _notebook_plain_last_line or ''
-        pad = visible_length(previous) - visible_length(joined)
+        joined_width = visible_length(joined)
+        pad = _notebook_plain_last_width - joined_width
         _write('\r')
         _write(joined)
         if pad > 0:
             _write(' ' * pad)
         _flush_stream()
         _notebook_plain_last_line = joined
+        _notebook_plain_last_width = joined_width
         return
 
     # We cannot reposition multiple lines reliably without cursor controls. Emit the block once.
@@ -209,6 +229,7 @@ def _notebook_render_plain_stdout(lines: Sequence[str], *, strip_styles: bool = 
     _write(joined)
     _flush_stream()
     _notebook_plain_last_line = lines[-1]
+    _notebook_plain_last_width = visible_length(lines[-1])
 
 def render_lock() -> threading.RLock:
     """Provide access to the shared render lock used for stdout writes."""
@@ -234,6 +255,8 @@ _last_active_draw = 0.0
 
 
 def _set_stack_cursor_anchor(line_count: int, terminal_rows: int) -> None:
+    """Record whether the cursor is parked above the stack or on its top row."""
+
     global _cursor_positioned_above_stack, _cursor_positioned_on_stack_top
 
     if line_count <= 0:
@@ -251,6 +274,8 @@ def _set_stack_cursor_anchor(line_count: int, terminal_rows: int) -> None:
 
 
 def _should_defer_log_output_locked(terminal_rows: int) -> bool:
+    """Decide whether fullscreen stacks must buffer logs until they clear."""
+
     if _last_drawn_progress_count <= 0:
         return False
 
@@ -264,6 +289,8 @@ def _should_defer_log_output_locked(terminal_rows: int) -> bool:
 
 
 def _flush_deferred_logs_locked() -> None:
+    """Replay log lines buffered while the stack occupied the full terminal."""
+
     global _deferred_log_records
 
     if not _deferred_log_records or logger is None:
@@ -307,6 +334,8 @@ def detach_progress_bar(pb: "ProgressBar") -> None:
 
 
 def mark_progress_bar_dirty(pb: "ProgressBar") -> None:
+    """Mark an attached progress bar for the next stack redraw."""
+
     with _STATE_LOCK:
         if pb in _attached_progress_bars:
             _dirty_progress_bars.add(pb)
@@ -344,6 +373,8 @@ def _clear_progress_stack_locked(
     for_log_output: bool = False,
     backend_state: Optional[RenderBackendState] = None,
 ) -> None:
+    """Erase the active stack and reset all renderer bookkeeping."""
+
     global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack, _cursor_positioned_on_stack_top, _stack_redraw_invalidated
 
     count = _last_drawn_progress_count
@@ -379,6 +410,8 @@ def _clear_progress_stack_locked(
 
     sequences: list[str] = []
 
+    # Reposition to the stack anchor before clearing so both bottom-anchored
+    # and fullscreen stacks erase the same footprint they last painted.
     if _cursor_positioned_above_stack:
         sequences.append('\033[1B')
     elif _cursor_positioned_on_stack_top:
@@ -414,7 +447,7 @@ def _clear_progress_stack_locked(
         _flush_deferred_logs_locked()
 
 
-def _prepare_progress_stack_for_log_locked() -> bool:
+def _prepare_progress_stack_for_log_locked(backend_state: Optional[RenderBackendState] = None) -> bool:
     """Write a log line above the active stack and force a full redraw afterward."""
 
     global _stack_redraw_invalidated
@@ -423,7 +456,14 @@ def _prepare_progress_stack_for_log_locked() -> bool:
     if count == 0:
         return False
 
-    if not _stdout_supports_cursor_movement():
+    state = backend_state
+    if state is None:
+        try:
+            state = _current_render_backend_state()
+        except Exception:
+            state = None
+
+    if state is None or not state.supports_cursor:
         return False
 
     if not _cursor_positioned_above_stack:
@@ -434,6 +474,72 @@ def _prepare_progress_stack_for_log_locked() -> bool:
     # are restored even when the frame contents are otherwise unchanged.
     _stack_redraw_invalidated = True
     return True
+
+
+@lru_cache(maxsize=32)
+def _level_prefix(level_label: str, supports_ansi: bool) -> str:
+    """Build and cache the colored or plain log-level prefix."""
+
+    level_width = max(LEVEL_MAX_LENGTH, len(level_label))
+    level_padding = " " * (level_width - len(level_label))
+    if not supports_ansi:
+        return f"{level_label}{level_padding} "
+
+    reset = COLORS["RESET"]
+    color = COLORS.get(level_label, reset)
+    return f"{color}{level_label}{reset}{level_padding} "
+
+
+def _iter_contiguous_blocks(indexes: Sequence[int]):
+    """Group sorted row indexes into contiguous rewrite blocks."""
+
+    if not indexes:
+        return
+
+    start = indexes[0]
+    end = start
+    for index in indexes[1:]:
+        if index == end + 1:
+            end = index
+            continue
+        yield start, end
+        start = index
+        end = index
+    yield start, end
+
+
+def _rewrite_stack_rows(
+    lines: Sequence[str],
+    row_indexes: Sequence[int],
+    *,
+    cursor_above_stack: bool,
+) -> str:
+    """Rewrite specific stack rows while keeping the cursor at the anchor."""
+
+    if not row_indexes:
+        return ""
+
+    base_offset = 1 if cursor_above_stack else 0
+    sequences: list[str] = []
+
+    for start, end in _iter_contiguous_blocks(row_indexes):
+        offset = start + base_offset
+        if offset > 0:
+            sequences.append(f'\033[{offset}B')
+
+        for index in range(start, end + 1):
+            sequences.append('\r')
+            sequences.append('\033[2K')
+            sequences.append(lines[index])
+            sequences.append('\r')
+            if index < end:
+                sequences.append('\033[1B')
+
+        move_up = offset + (end - start)
+        if move_up > 0:
+            sequences.append(f'\033[{move_up}A')
+
+    return ''.join(sequences)
 
 
 def clear_progress_stack(lock_held: bool = False, backend_state: Optional[RenderBackendState] = None) -> None:
@@ -447,6 +553,8 @@ def clear_progress_stack(lock_held: bool = False, backend_state: Optional[Render
 
 
 def _active_progress_bars() -> list["ProgressBar"]:
+    """Return a snapshot of bars currently attached to the shared stack."""
+
     with _STATE_LOCK:
         return list(_attached_progress_bars)
 
@@ -459,6 +567,8 @@ def _call_resolve_rendered_line(
     allow_repeat: bool,
     backend_state: RenderBackendState,
 ) -> Optional[str]:
+    """Call a bar's render resolver while tolerating older call signatures."""
+
     try:
         return resolve_rendered(
             columns,
@@ -483,6 +593,8 @@ def _render_progress_stack_locked(
     columns_hint: Optional[int] = None,
     backend_state: Optional[RenderBackendState] = None,
 ) -> None:
+    """Render the attached stack using diff redraws when possible."""
+
     global _last_drawn_progress_count, _last_rendered_terminal_size, _last_rendered_progress_lines, _cursor_positioned_above_stack, _cursor_positioned_on_stack_top, _stack_redraw_invalidated
 
     state = backend_state or _current_render_backend_state(columns_hint)
@@ -586,25 +698,20 @@ def _render_progress_stack_locked(
     )
 
     if lines and can_diff_redraw:
+        # Stable footprint: only touch rows whose rendered contents changed.
         changed_indexes = [
             index for index, (old_line, new_line) in enumerate(zip(previous_lines, lines))
             if old_line != new_line
         ]
 
         if changed_indexes:
-            base_offset = 1 if _cursor_positioned_above_stack else 0
-            for index in changed_indexes:
-                offset = index + base_offset
-                if offset > 0:
-                    sequences.append(f'\033[{offset}B')
-                sequences.append('\r')
-                sequences.append('\033[2K')
-                sequences.append(lines[index])
-                sequences.append('\r')
-                if offset > 0:
-                    sequences.append(f'\033[{offset}A')
-
-            _write(''.join(sequences))
+            _write(
+                _rewrite_stack_rows(
+                    lines,
+                    changed_indexes,
+                    cursor_above_stack=_cursor_positioned_above_stack,
+                )
+            )
             _flush_stream()
 
         _last_drawn_progress_count = len(lines)
@@ -619,19 +726,15 @@ def _render_progress_stack_locked(
         return
 
     if lines and can_rewrite_full_footprint:
-        base_offset = 1 if _cursor_positioned_above_stack else 0
-        for index, line in enumerate(lines):
-            offset = index + base_offset
-            if offset > 0:
-                sequences.append(f'\033[{offset}B')
-            sequences.append('\r')
-            sequences.append('\033[2K')
-            sequences.append(line)
-            sequences.append('\r')
-            if offset > 0:
-                sequences.append(f'\033[{offset}A')
-
-        _write(''.join(sequences))
+        # Same row count but invalidated content or terminal geometry changed:
+        # rewrite the whole footprint in place without clearing below it.
+        _write(
+            _rewrite_stack_rows(
+                lines,
+                list(range(len(lines))),
+                cursor_above_stack=_cursor_positioned_above_stack,
+            )
+        )
         _flush_stream()
 
         _last_drawn_progress_count = len(lines)
@@ -716,16 +819,22 @@ def render_progress_stack(
 
 
 def _record_progress_activity_locked() -> None:
+    """Update the last-seen progress activity timestamp."""
+
     global _last_active_draw
     _last_active_draw = time.monotonic()
 
 
 def _record_progress_activity() -> None:
+    """Thread-safe wrapper for bumping the progress activity timestamp."""
+
     with _STATE_LOCK:
         _record_progress_activity_locked()
 
 
 def _should_refresh_in_background(state: RenderBackendState, bars: Sequence["ProgressBar"]) -> bool:
+    """Return whether the background worker should wake for current bars."""
+
     if state.supports_cursor or state.notebook:
         return True
 
@@ -737,6 +846,8 @@ def _should_refresh_in_background(state: RenderBackendState, bars: Sequence["Pro
 
 
 def _progress_refresh_worker() -> None:
+    """Background loop that advances time-based renderables and resizes."""
+
     while True:
         time.sleep(_REFRESH_INTERVAL_SECONDS)
 
@@ -769,6 +880,8 @@ def _progress_refresh_worker() -> None:
                 if not callable(tick) or not tick(now):
                     continue
 
+                # Precompute refreshed frames while holding the same backend
+                # snapshot so one tick does not race a second size probe.
                 resolve_rendered = getattr(pb, "_resolve_rendered_line", None)
                 if callable(resolve_rendered):
                     rendered = _call_resolve_rendered_line(
@@ -796,6 +909,8 @@ def _progress_refresh_worker() -> None:
 
 
 def _ensure_background_refresh_thread() -> None:
+    """Start the shared renderer refresh worker exactly once."""
+
     global _refresh_thread
 
     with _STATE_LOCK:
@@ -821,6 +936,8 @@ COLORS = {
 }
 
 class LEVEL(str, Enum):
+    """Canonical LogBar level labels used for output formatting."""
+
     DEBUG = "DEBUG"
     WARN = "WARN"
     INFO = "INFO"
@@ -858,6 +975,8 @@ LOGGING_TO_LEVEL_LABEL = {
 }
 
 class LogBar(logging.Logger):
+    """Logger subclass that multiplexes normal logs with live renderables."""
+
     NOTSET = logging.NOTSET
     DEBUG = logging.DEBUG
     INFO = logging.INFO
@@ -873,6 +992,8 @@ class LogBar(logging.Logger):
     @classmethod
     # return a shared global/singleton logger
     def shared(cls, override_logger: Optional[bool] = False):
+        """Return the process-wide shared LogBar instance."""
+
         global logger
 
         created_logger = False
@@ -913,11 +1034,15 @@ class LogBar(logging.Logger):
 
 
     def pb(self, iterable: Iterable, *, output_interval: Optional[int] = None):
+        """Create and attach a determinate progress bar owned by this logger."""
+
         from logbar.progress import ProgressBar
 
         return ProgressBar(iterable, owner=self, output_interval=output_interval).attach(self)
 
     def spinner(self, title: str = "", *, interval: float = 0.5, tail_length: int = 4):
+        """Create and attach an indeterminate rolling spinner."""
+
         from logbar.progress import RollingProgressBar
 
         bar = RollingProgressBar(owner=self, interval=interval, tail_length=tail_length)
@@ -926,6 +1051,8 @@ class LogBar(logging.Logger):
         return bar.attach(self)
 
     def history_add(self, msg) -> bool:
+        """Track deduplicated messages for the `.once(...)` helpers."""
+
         h = hash(msg) # TODO only msg is checked not level + msg
 
         with self._history_lock:
@@ -940,61 +1067,103 @@ class LogBar(logging.Logger):
         return True
 
     class critical_cls:
+        """Proxy object that preserves legacy `log.critical.once(...)` calls."""
+
         def __init__(self, logger):
+            """Bind the proxy to its owning logger instance."""
+
             self.logger = logger
 
         def once(self, msg, *args, **kwargs):
+            """Emit the message only if it has not been seen before."""
+
             if self.logger.history_add(msg):
                 self(msg, *args, **kwargs)
 
         def __call__(self, msg, *args, **kwargs):
+            """Dispatch a critical message through the logger pipeline."""
+
             self.logger._process(LEVEL.CRITICAL, msg, *args, **kwargs)
 
     class warn_cls:
+        """Proxy object that preserves legacy `log.warn.once(...)` calls."""
+
         def __init__(self, logger):
+            """Bind the proxy to its owning logger instance."""
+
             self.logger = logger
 
         def once(self, msg, *args, **kwargs):
+            """Emit the message only if it has not been seen before."""
+
             if self.logger.history_add(msg):
                 self(msg, *args, **kwargs)
 
         def __call__(self, msg, *args, **kwargs):
+            """Dispatch a warning message through the logger pipeline."""
+
             self.logger._process(LEVEL.WARN, msg, *args, **kwargs)
 
     class debug_cls:
+        """Proxy object that preserves legacy `log.debug.once(...)` calls."""
+
         def __init__(self, logger):
+            """Bind the proxy to its owning logger instance."""
+
             self.logger = logger
 
         def once(self, msg, *args, **kwargs):
+            """Emit the message only if it has not been seen before."""
+
             if self.logger.history_add(msg):
                 self(msg, *args, **kwargs)
 
         def __call__(self, msg, *args, **kwargs):
+            """Dispatch a debug message through the logger pipeline."""
+
             self.logger._process(LEVEL.DEBUG, msg, *args, **kwargs)
 
     class info_cls:
+        """Proxy object that preserves legacy `log.info.once(...)` calls."""
+
         def __init__(self, logger):
+            """Bind the proxy to its owning logger instance."""
+
             self.logger = logger
 
         def once(self, msg, *args, **kwargs):
+            """Emit the message only if it has not been seen before."""
+
             if self.logger.history_add(msg):
                 self(msg, *args, **kwargs)
 
         def __call__(self, msg, *args, **kwargs):
+            """Dispatch an info message through the logger pipeline."""
+
             self.logger._process(LEVEL.INFO, msg, *args, **kwargs)
 
     class error_cls:
+        """Proxy object that preserves legacy `log.error.once(...)` calls."""
+
         def __init__(self, logger):
+            """Bind the proxy to its owning logger instance."""
+
             self.logger = logger
 
         def once(self, msg, *args, **kwargs):
+            """Emit the message only if it has not been seen before."""
+
             if self.logger.history_add(msg):
                 self(msg, *args, **kwargs)
 
         def __call__(self, msg, *args, **kwargs):
+            """Dispatch an error message through the logger pipeline."""
+
             self.logger._process(LEVEL.ERROR, msg, *args, **kwargs)
 
     def __init__(self, name):
+        """Initialize the logger and install the legacy level proxies."""
+
         super().__init__(name)
         self._warning = self.warning
         self._debug = self.debug
@@ -1012,6 +1181,8 @@ class LogBar(logging.Logger):
         self._history_lock = threading.Lock()
 
     def _normalize_level(self, level: Union[LEVEL, int, str]) -> int:
+        """Normalize enum, string, or numeric levels to stdlib integers."""
+
         if isinstance(level, LEVEL):
             return LEVEL_TO_LOGGING[level]
 
@@ -1040,6 +1211,8 @@ class LogBar(logging.Logger):
         )
 
     def _level_label(self, level: Union[LEVEL, int, str], normalized_level: int) -> str:
+        """Resolve the display label used in the rendered log prefix."""
+
         if isinstance(level, LEVEL):
             return level.value
 
@@ -1151,6 +1324,8 @@ class LogBar(logging.Logger):
         allow_defer: bool = True,
         backend_state: Optional[RenderBackendState] = None,
     ) -> None:
+        """Emit one log line while preserving any active progress stack."""
+
         global last_rendered_length, _cursor_positioned_above_stack, _deferred_log_records
 
         backend_state = backend_state or _current_render_backend_state()
@@ -1177,18 +1352,12 @@ class LogBar(logging.Logger):
             _deferred_log_records.append((normalized_level, str_msg))
             return
 
-        stacked_log_insert = _prepare_progress_stack_for_log_locked()
+        stacked_log_insert = _prepare_progress_stack_for_log_locked(backend_state=backend_state)
         if not stacked_log_insert:
-            _clear_progress_stack_locked(for_log_output=True)
+            _clear_progress_stack_locked(for_log_output=True, backend_state=backend_state)
 
-        if backend_state.supports_ansi:
-            reset = COLORS["RESET"]
-            color = COLORS.get(level_label, reset)
-        else:
-            reset = ""
-            color = ""
-        level_padding = " " * (level_width - len(level_label))
-        _print(f"\r{color}{level_label}{reset}{level_padding} {rendered_message}", end='\n', flush=True)
+        prefix = _level_prefix(level_label, backend_state.supports_ansi)
+        _print(f"\r{prefix}{rendered_message}", end='\n', flush=True)
 
         with _STATE_LOCK:
             last_rendered_length = printable_length
@@ -1201,6 +1370,8 @@ class LogBar(logging.Logger):
         _render_progress_stack_locked(backend_state=backend_state)
 
     def _process(self, level: Union[LEVEL, int, str], msg, *args, **kwargs):
+        """Shared implementation for all public logging entry points."""
+
         normalized_level = self._normalize_level(level)
         if not self.isEnabledFor(normalized_level):
             return

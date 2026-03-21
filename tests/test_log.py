@@ -542,6 +542,60 @@ class TestProgressBar(unittest.TestCase):
             for row in rows:
                 logbar_module.detach_progress_bar(row)
 
+    def test_progress_stack_groups_contiguous_dirty_rows_into_one_rewrite_block(self):
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        class StaticRenderable:
+            def __init__(self, line: str):
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        columns = 28
+        rows = [
+            StaticRenderable("row-0"),
+            StaticRenderable("row-1"),
+            StaticRenderable("row-2"),
+        ]
+        buffer = TTYBuffer()
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                checkpoint = len(buffer.getvalue())
+                rows[1].line = "row-1-updated"
+                rows[2].line = "row-2-updated"
+                logbar_module.render_progress_stack()
+
+            delta = buffer.getvalue()[checkpoint:]
+            cleaned_delta = ANSI_ESCAPE_RE.sub('', delta)
+
+            self.assertIn(rows[1].line, cleaned_delta)
+            self.assertIn(rows[2].line, cleaned_delta)
+            self.assertEqual(delta.count("\033[2B"), 1)
+            self.assertEqual(delta.count("\033[1B"), 1)
+            self.assertEqual(delta.count("\033[3A"), 1)
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module.clear_progress_stack()
+            for row in rows:
+                logbar_module.detach_progress_bar(row)
+
     def test_progress_stack_uses_cached_lines_for_dirty_tracked_renderables(self):
         from logbar import logbar as logbar_module
 

@@ -47,16 +47,22 @@ logger = LogBar.shared()
 
 @contextmanager
 def _fallback_nullcontext():
+    """Small local stand-in for environments without `nullcontext()` support."""
+
     yield
 
 
 def _safe_nullcontext(_nullcontext=nullcontext, _fallback=_fallback_nullcontext):
+    """Return a working nullcontext object across supported runtimes."""
+
     if callable(_nullcontext):
         return _nullcontext()
     return _fallback()
 
 @lru_cache(maxsize=1)
 def _env_animation_enabled() -> bool:
+    """Read the global animation toggle once per process."""
+
     value = os.environ.get("LOGBAR_ANIMATION", "1")
     return str(value).strip().lower() not in {"0", "false", "off", "no"}
 
@@ -83,18 +89,26 @@ def _env_progress_output_interval() -> int:
 
 
 def _fg_256(code: int) -> str:
+    """Build a 256-color foreground SGR escape."""
+
     return f"\033[38;5;{code}m"
 
 
 def _fg_rgb(red: int, green: int, blue: int) -> str:
+    """Build a truecolor foreground SGR escape."""
+
     return f"\033[38;2;{red};{green};{blue}m"
 
 
 def _clamp_rgb(value: int) -> int:
+    """Clamp one RGB channel to the ANSI truecolor range."""
+
     return max(0, min(255, value))
 
 
 def _resolve_color(color: Optional[str]) -> str:
+    """Normalize named, numeric, hex, or raw ANSI colors into SGR escapes."""
+
     if not color:
         return ""
 
@@ -125,6 +139,8 @@ def _resolve_color(color: Optional[str]) -> str:
 
 @dataclass(frozen=True)
 class ProgressStyle:
+    """Immutable description of how a progress bar should be drawn."""
+
     name: str
     fill_char: str = "█"
     empty_char: str = "-"
@@ -136,12 +152,18 @@ class ProgressStyle:
     head_color: Optional[str] = None
 
     def with_fill_char(self, char: str) -> "ProgressStyle":
+        """Return a copy with a different fully filled glyph."""
+
         return replace(self, fill_char=char)
 
     def with_empty_char(self, char: str) -> "ProgressStyle":
+        """Return a copy with a different empty-cell glyph."""
+
         return replace(self, empty_char=char)
 
     def with_fill_ramp(self, chars: Optional[Sequence[str]]) -> "ProgressStyle":
+        """Return a copy with a new partial-fill ramp."""
+
         return replace(self, fill_ramp=tuple(chars) if chars is not None else ())
 
     def with_colors(
@@ -151,6 +173,8 @@ class ProgressStyle:
         gradient: Optional[bool] = None,
         head_color: Optional[str] = None,
     ) -> "ProgressStyle":
+        """Return a copy with updated palette, empty, or head colors."""
+
         style = self
         if fill is not None:
             style = replace(style, fill_colors=tuple(fill))
@@ -163,9 +187,13 @@ class ProgressStyle:
         return style
 
     def with_head_char(self, char: Optional[str]) -> "ProgressStyle":
+        """Return a copy with a new head glyph."""
+
         return replace(self, head_char=char)
 
     def render(self, filled: int, empty: int) -> tuple[str, str]:
+        """Render the bar using whole filled and empty cells."""
+
         result = self._bar_renderer().render(
             filled=filled,
             empty=empty,
@@ -182,6 +210,8 @@ class ProgressStyle:
         *,
         units_per_cell: int = SUBCELL_RESOLUTION,
     ) -> tuple[str, str]:
+        """Render the bar using sub-cell units for smoother progress."""
+
         result = self._bar_renderer(units_per_cell=units_per_cell).render_units(
             total_cells=total_cells,
             filled_units=filled_units,
@@ -192,6 +222,8 @@ class ProgressStyle:
         return result.plain, result.rendered
 
     def _bar_renderer(self, units_per_cell: int = SUBCELL_RESOLUTION) -> CellBarRenderer:
+        """Build the low-level bar renderer for this style."""
+
         return CellBarRenderer(
             fill_char=self.fill_char,
             empty_char=self.empty_char,
@@ -201,6 +233,8 @@ class ProgressStyle:
         )
 
     def _select_color(self, idx: int, total: int) -> str:
+        """Choose the fill color for one occupied bar cell."""
+
         if not self.fill_colors:
             return ""
 
@@ -214,6 +248,8 @@ class ProgressStyle:
 
 
 def _register_default_styles() -> dict[str, ProgressStyle]:
+    """Create the built-in named progress styles shipped with LogBar."""
+
     styles = {}
 
     def add(style: ProgressStyle):
@@ -319,10 +355,14 @@ _DEFAULT_STYLE_NAME = "emerald_glow"
 
 
 def progress_style_names() -> list[str]:
+    """Return the registered style names in stable sorted order."""
+
     return sorted(_PROGRESS_STYLES)
 
 
 def get_progress_style(style: Union[str, ProgressStyle]) -> ProgressStyle:
+    """Resolve either a style name or an already-built style object."""
+
     if isinstance(style, ProgressStyle):
         return style
 
@@ -333,33 +373,49 @@ def get_progress_style(style: Union[str, ProgressStyle]) -> ProgressStyle:
 
 
 def register_progress_style(style: ProgressStyle) -> None:
+    """Register or replace a named progress style."""
+
     _PROGRESS_STYLES[style.name] = style
 
 
 # TODO FIXME: what does this do exactly?
 class ProgressBarWarning(Warning):
+    """Warning subclass used for compatibility with older cleanup behavior."""
+
     def __init__(self, msg, fp_write=None, *a, **k):
+        """Optionally emit the warning immediately to a file-like writer."""
+
         if fp_write is not None:
             fp_write("\n" + self.__class__.__name__ + ": " + str(msg).rstrip() + '\n')
         else:
             super().__init__(msg, *a, **k)
 
 class RenderMode(str, Enum):
+    """Control whether progress bars redraw automatically during iteration."""
+
     AUTO = "AUTO" # pb will auto draw() at the START of each itereation
     MANUAL = "MANUAL" # pb will not call draw() in each iteration and user must call draw()
 
 
 class ProgressBar:
+    """Deterministic progress bar that can render inline or in a shared stack."""
+
     @classmethod
     def available_styles(cls) -> list[str]:
+        """List the names of all registered progress styles."""
+
         return progress_style_names()
 
     @classmethod
     def register_style(cls, style: ProgressStyle) -> None:
+        """Register a style through the class-level convenience API."""
+
         register_progress_style(style)
 
     @classmethod
     def set_default_style(cls, style: Union[str, ProgressStyle]) -> ProgressStyle:
+        """Set the process-wide default style for new progress bars."""
+
         if isinstance(style, ProgressStyle):
             register_progress_style(style)
             resolved = style
@@ -372,6 +428,8 @@ class ProgressBar:
 
     @classmethod
     def default_style(cls) -> ProgressStyle:
+        """Return the current process-wide default style."""
+
         return get_progress_style(_DEFAULT_STYLE_NAME)
 
     def __init__(
@@ -381,6 +439,8 @@ class ProgressBar:
         *,
         output_interval: Optional[int] = None,
     ):
+        """Create a progress bar around an iterable or a total step count."""
+
         self._iterating = False # state: in init or active iteration
 
         self._render_mode = RenderMode.AUTO
@@ -426,23 +486,31 @@ class ProgressBar:
         self._next_title_refresh_at = 0.0
 
     def _update_title_cache(self, title: str) -> None:
+        """Cache plain-text and width metadata for the current title."""
+
         self._title = title
         self._title_plain = strip_ansi(title)
         self._title_width = visible_length(title)
         self._title_padding = " " * max(0, self.max_title_len - self._title_width)
 
     def _update_subtitle_cache(self, subtitle: str) -> None:
+        """Cache plain-text and width metadata for the current subtitle."""
+
         self._subtitle = subtitle
         self._subtitle_plain = strip_ansi(subtitle)
         self._subtitle_width = visible_length(subtitle)
         self._subtitle_padding = " " * max(0, self.max_subtitle_len - self._subtitle_width)
 
     def _mark_dirty(self):
+        """Mark the bar for stack redraw if it is currently attached."""
+
         if self._attached:
             mark_progress_bar_dirty(self)
         return self
 
     def _tick_background_refresh(self, now: float) -> bool:
+        """Advance time-based title animation state for shared refresh loops."""
+
         if not self._attached or not self._title or not self._should_animate_title():
             self._next_title_refresh_at = 0.0
             return False
@@ -462,6 +530,8 @@ class ProgressBar:
             show_left_steps: Optional[bool] = None,
             left_steps_offset: Optional[int] = None,
             ):
+        """Update left-side step labels without changing progress state."""
+
         if show_left_steps is not None:
             self.ui_show_left_steps = show_left_steps
 
@@ -470,6 +540,8 @@ class ProgressBar:
         return self._mark_dirty()
 
     def style(self, style: Union[str, ProgressStyle]):
+        """Swap the active named or custom drawing style."""
+
         resolved = get_progress_style(style)
         self._style = resolved
         self._style_name = resolved.name
@@ -482,6 +554,8 @@ class ProgressBar:
         return self._mark_dirty()
 
     def fill(self, fill: Union[str, ProgressStyle] = "█", empty: Optional[str] = None):
+        """Override the fill and optional empty glyphs for this bar."""
+
         if isinstance(fill, ProgressStyle) or (isinstance(fill, str) and fill in _PROGRESS_STYLES):
             return self.style(fill)
 
@@ -510,6 +584,8 @@ class ProgressBar:
         gradient: Optional[bool] = None,
         head: Optional[str] = None,
     ):
+        """Override fill, empty, gradient, or head colors for this bar."""
+
         style = self._style
 
         if fill is not None:
@@ -536,6 +612,8 @@ class ProgressBar:
         return self._mark_dirty()
 
     def head(self, char: Optional[str] = None, color: Optional[str] = None):
+        """Configure the moving head glyph and optional head color."""
+
         style = self._style
 
         if char is not None:
@@ -552,6 +630,8 @@ class ProgressBar:
         return self._mark_dirty()
 
     def title(self, title: str):
+        """Set the title shown before the bar and update width tracking."""
+
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Title should not be updated after iteration has started unless in `manual` render mode.")
 
@@ -572,6 +652,8 @@ class ProgressBar:
         return self._mark_dirty()
 
     def subtitle(self, subtitle: str):
+        """Set the subtitle shown between the title and the bar."""
+
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Sub-title should not be updated after iteration has started unless in `manual` render mode.")
 
@@ -584,18 +666,26 @@ class ProgressBar:
 
     # set render mode
     def mode(self, mode: RenderMode):
+        """Switch between automatic and manual redraw modes."""
+
         self._render_mode = mode
         return self._mark_dirty()
 
     def auto(self):
+        """Enable redraws on each logical iteration step."""
+
         self._render_mode = RenderMode.AUTO
         return self._mark_dirty()
 
     def manual(self ):
+        """Disable automatic redraws so callers drive rendering explicitly."""
+
         self._render_mode = RenderMode.MANUAL
         return self._mark_dirty()
 
     def _render_lock_context(self):
+        """Return a context manager for the shared render lock when available."""
+
         lock_provider = render_lock if callable(render_lock) else None
         if lock_provider is None:
             return _safe_nullcontext(), False
@@ -628,6 +718,8 @@ class ProgressBar:
         return _safe_nullcontext(), False
 
     def _fallback_detach_registry(self) -> None:
+        """Best-effort detach path for interpreter shutdown edge cases."""
+
         try:
             from . import logbar as logbar_module
         except Exception:
@@ -666,6 +758,8 @@ class ProgressBar:
                     pass
 
     def attach(self, logger: Optional["LogBarType"] = None):
+        """Attach the bar to a logger so it renders in the shared stack."""
+
         if self.closed:
             return self
 
@@ -693,6 +787,8 @@ class ProgressBar:
         return self
 
     def detach(self):
+        """Detach the bar from stack management and stop future redraws."""
+
         if not self._attached:
             return self
 
@@ -739,6 +835,8 @@ class ProgressBar:
         return self.step()
 
     def _should_render(self, force: bool = False, allow_repeat: bool = False) -> bool:
+        """Return whether this logical state change should emit a new frame."""
+
         if force:
             return True
 
@@ -763,6 +861,8 @@ class ProgressBar:
         backend_state: Optional[RenderBackendState] = None,
         style_enabled: Optional[bool] = None,
     ) -> Optional[str]:
+        """Return the next rendered line, honoring draw throttling rules."""
+
         if not self._should_render(force=force, allow_repeat=allow_repeat):
             return None
 
@@ -775,6 +875,8 @@ class ProgressBar:
         return rendered_line
 
     def _render_backend_state(self, backend_state: Optional[RenderBackendState] = None) -> RenderBackendState:
+        """Resolve backend capabilities for the current draw call."""
+
         if backend_state is not None:
             return backend_state
         return render_backend_state(
@@ -784,6 +886,8 @@ class ProgressBar:
         )
 
     def draw(self, force: bool = False):
+        """Render the current progress state either inline or in the stack."""
+
         # Even skipped draws count as activity. This prevents the background
         # refresher from redrawing the same bar immediately and undoing the
         # throttle when progress is advancing quickly.
@@ -830,6 +934,8 @@ class ProgressBar:
                         raise
 
     def calc_time(self, iteration):
+        """Return elapsed and estimated remaining time for the progress line."""
+
         used_time = int(time.time() - self.time)
         formatted_time = str(datetime.timedelta(seconds=used_time))
         completed = iteration
@@ -845,6 +951,8 @@ class ProgressBar:
         backend_state: Optional[RenderBackendState] = None,
         style_enabled: Optional[bool] = None,
     ) -> str:
+        """Build a full rendered line snapshot for the current progress state."""
+
         backend_state = self._render_backend_state(backend_state)
         if columns is None:
             columns = backend_state.columns
@@ -871,6 +979,8 @@ class ProgressBar:
             self.ui_show_left_steps_text_max_len = len(self.ui_show_left_steps_text)
             pre_bar_size += self.ui_show_left_steps_text_max_len
 
+        # Titles and subtitles are cached separately so repeated redraws only
+        # pay for width math when the text actually changes.
         padding = self._title_padding + self._subtitle_padding
 
         available_columns = columns if columns is not None and columns > 0 else 0
@@ -883,6 +993,8 @@ class ProgressBar:
         if self.step() >= effective_total and total_units > 0:
             filled_units = total_units
         elif total_units > 0:
+            # Keep very early progress visible by promoting tiny non-zero
+            # values to the first sub-cell instead of leaving the bar empty.
             filled_units = int((self.step() * total_units) / effective_total)
             if 0 < self.step() < effective_total and filled_units == 0:
                 filled_units = 1
@@ -922,6 +1034,8 @@ class ProgressBar:
         supports_styling: bool = True,
         animate_title: Optional[bool] = None,
     ) -> str:
+        """Assemble the final visible line from title, bar, and status fields."""
+
         segments_plain = []
         segments_rendered = []
 
@@ -954,6 +1068,8 @@ class ProgressBar:
             else:
                 append_segment(left_steps_text)
 
+        # Keep a plain-text mirror of the line so width measurement and
+        # truncation stay correct even when the rendered form contains ANSI.
         plain_bar_segment = f"{bar_plain}| {log_text}"
         rendered_bar_segment = (
             f"{bar_rendered}| {log_text}"
@@ -981,6 +1097,8 @@ class ProgressBar:
         return rendered_out
 
     def _animated_text(self, text: str) -> str:
+        """Apply the sweeping highlight effect to one title-like string."""
+
         if not text:
             return ""
 
@@ -1021,6 +1139,8 @@ class ProgressBar:
         return ''.join(parts)
 
     def _truncate_ansi(self, text: str, limit: int) -> str:
+        """Delegate ANSI-aware truncation through the shared drawing helpers."""
+
         return truncate_ansi(text, limit)
 
     def _should_animate_title(
@@ -1028,6 +1148,8 @@ class ProgressBar:
         backend_state: Optional[RenderBackendState] = None,
         style_enabled: Optional[bool] = None,
     ) -> bool:
+        """Decide whether title animation is supported on the active backend."""
+
         if not _env_animation_enabled():
             return False
         try:
@@ -1039,11 +1161,15 @@ class ProgressBar:
         return bool(style_enabled) and (state.supports_cursor or state.notebook)
 
     def __bool__(self):
+        """Mirror the truthiness of the wrapped iterable when defined."""
+
         if self.iterable is None:
             raise TypeError('bool() undefined when iterable == total == None')
         return bool(self.iterable)
 
     def __len__(self):
+        """Return the total number of logical steps when it can be inferred."""
+
         return (
             self.iterable.shape[0] if hasattr(self.iterable, "shape")
             else len(self.iterable) if hasattr(self.iterable, "__len__")
@@ -1052,6 +1178,8 @@ class ProgressBar:
 
     # TODO FIXME: I have no cluse why the try/catch is catching nothing here
     def __reversed__(self):
+        """Reverse the underlying iterable and reuse the normal iterator path."""
+
         try:
             original = self.iterable
         except AttributeError:
@@ -1063,14 +1191,20 @@ class ProgressBar:
             self.iterable = original
 
     def __contains__(self, item):
+        """Proxy containment checks to the wrapped iterable when possible."""
+
         contains = getattr(self.iterable, '__contains__', None)
         return contains(item) if contains is not None else item in self.__iter__()
 
     def __enter__(self):
+        """Support `with ProgressBar(...) as pb` usage."""
+
         return self
 
     # TODO FIXME: I don't understand the exception here. What are we catching? yield error?
     def __exit__(self, exc_type, exc_value, traceback):
+        """Ensure the bar closes cleanly when leaving a context manager."""
+
         try:
             self.close()
         except AttributeError:
@@ -1082,24 +1216,36 @@ class ProgressBar:
             warn("AttributeError ignored", ProgressBarWarning, stacklevel=2)
 
     def __del__(self):
+        """Best-effort cleanup when the bar is garbage-collected."""
+
         self.close()
 
     # TODO FIXME: what does this do exactly? where is this `pos` attr magically coming from? I don't see it anywhere
     @property
     def _comparable(self):
+        """Expose a stable ordering key compatible with older integrations."""
+
         return abs(getattr(self, "pos", 1 << 31))
 
     def __hash__(self):
+        """Keep instances hashable so they can live in dirty tracking sets."""
+
         return id(self)
 
     def step(self) -> int:
+        """Return the current logical progress position."""
+
         return self.current_iter_step
 
     def next(self):
+        """Advance progress by one logical step."""
+
         self.current_iter_step += 1
         return self
 
     def __iter__(self):
+        """Iterate the wrapped iterable while updating and rendering progress."""
+
         iterable = self.iterable
 
         for obj in iterable:
@@ -1118,6 +1264,8 @@ class ProgressBar:
         return
 
     def close(self):
+        """Emit a final frame if needed, then detach the bar from rendering."""
+
         if self.closed:
             return
 
@@ -1136,6 +1284,8 @@ class RollingProgressBar(ProgressBar):
     """Indeterminate progress indicator with a rolling highlight."""
 
     def __init__(self, owner: Optional["LogBarType"] = None, interval: float = 0.5, tail_length: int = 4):
+        """Create an indeterminate spinner-style progress bar."""
+
         # Spinner animation already has its own wall-clock interval. Keep
         # output throttling at 1 so the phase animation stays smooth unless a
         # caller explicitly changes it later.
@@ -1147,15 +1297,21 @@ class RollingProgressBar(ProgressBar):
         self._next_spinner_refresh_at = 0.0
 
     def attach(self, logger: Optional["LogBarType"] = None):
+        """Attach and seed the next spinner refresh deadline."""
+
         super().attach(logger)
         self._next_spinner_refresh_at = time.monotonic() + self._interval
         return self
 
     def detach(self):
+        """Detach and clear any pending spinner refresh deadline."""
+
         self._next_spinner_refresh_at = 0.0
         return super().detach()
 
     def close(self):
+        """Stop the spinner without forcing a terminal 100% frame."""
+
         if self.closed:
             return
 
@@ -1171,12 +1327,18 @@ class RollingProgressBar(ProgressBar):
         return self
 
     def _ensure_auto_updates(self) -> None:
+        """Compatibility no-op kept for older spinner APIs."""
+
         return None
 
     def _stop_auto_updates(self) -> None:
+        """Compatibility no-op kept for older spinner APIs."""
+
         return None
 
     def _tick_background_refresh(self, now: float) -> bool:
+        """Advance spinner animation when its wall-clock interval elapses."""
+
         changed = super()._tick_background_refresh(now)
 
         if not self._attached or self.closed:
@@ -1196,9 +1358,13 @@ class RollingProgressBar(ProgressBar):
         return True
 
     def _advance_phase(self, steps: int = 1) -> None:
+        """Move the spinner head forward by one or more frames."""
+
         self._phase = (self._phase + max(1, int(steps))) % 1_000_000
 
     def _render_position(self) -> int:
+        """Use animation phase instead of step count for redraw throttling."""
+
         return self._phase
 
     def _render_snapshot(
@@ -1208,6 +1374,8 @@ class RollingProgressBar(ProgressBar):
         backend_state: Optional[RenderBackendState] = None,
         style_enabled: Optional[bool] = None,
     ) -> str:
+        """Build one spinner snapshot using elapsed time instead of percent."""
+
         backend_state = self._render_backend_state(backend_state)
         if columns is None:
             columns = backend_state.columns
@@ -1253,6 +1421,8 @@ class RollingProgressBar(ProgressBar):
         return self._last_rendered_line
 
     def _render_animation(self, bar_length: int, *, supports_styling: bool = True) -> tuple[str, str]:
+        """Render the rolling head and trailing tail for the spinner bar."""
+
         if bar_length <= 0:
             return "", ""
 

@@ -16,6 +16,8 @@ from typing import Callable, Optional, Tuple
 
 @dataclass(frozen=True)
 class RenderBackendState:
+    """Snapshot of the output backend capabilities for a single render pass."""
+
     columns: int
     lines: int
     is_tty: bool
@@ -26,6 +28,8 @@ class RenderBackendState:
 
 
 def _stream_terminal_size(stream: Optional[object], fallback: tuple[int, int]) -> Optional[tuple[int, int]]:
+    """Query terminal size from a specific stream when it exposes `fileno()`."""
+
     target = stream if stream is not None else sys.stdout
     fileno = getattr(target, "fileno", None)
     if not callable(fileno):
@@ -94,6 +98,8 @@ def render_backend_state(
     size_provider: Optional[Callable[[], Tuple[int, int]]] = None,
     notebook: bool = False,
 ) -> RenderBackendState:
+    """Resolve size and capability flags for the active rendering backend."""
+
     target = stream if stream is not None else sys.stdout
     provider = size_provider or (lambda: terminal_size(fallback=fallback, stream=target))
     columns, lines = provider()

@@ -25,6 +25,8 @@ class QueueingStdout:
     """Proxy stdout that funnels writes through a background flush thread."""
 
     def __init__(self, stream: object):
+        """Wrap an unbuffered-like stream so writes are serialized off-thread."""
+
         self._stream = stream
         self._queue: "queue.Queue[QueueItem]" = queue.Queue()
         self._closed = False
@@ -37,6 +39,8 @@ class QueueingStdout:
         self._worker.start()
 
     def write(self, data):  # type: ignore[override]
+        """Queue a write and return the character count immediately."""
+
         if self._closed:
             raise ValueError("I/O operation on closed file.")
 
@@ -50,10 +54,14 @@ class QueueingStdout:
         return len(data)
 
     def writelines(self, lines):  # type: ignore[override]
+        """Queue multiple lines using the single-write path for each entry."""
+
         for line in lines:
             self.write(line)
 
     def flush(self):  # type: ignore[override]
+        """Block until queued writes are flushed to the wrapped stream."""
+
         if self._closed:
             raise ValueError("flush of closed file")
 
@@ -62,6 +70,8 @@ class QueueingStdout:
         event.wait()
 
     def close(self):  # type: ignore[override]
+        """Drain pending output and stop the worker thread."""
+
         if self._closed:
             return
 
@@ -72,36 +82,50 @@ class QueueingStdout:
 
     @property
     def closed(self):  # type: ignore[override]
+        """Mirror the standard file-like `closed` attribute."""
+
         return self._closed
 
     def fileno(self):  # type: ignore[override]
+        """Expose `fileno()` when the wrapped stream supports it."""
+
         fileno = getattr(self._stream, "fileno", None)
         if callable(fileno):
             return fileno()
         raise AttributeError("underlying stream does not provide fileno")
 
     def isatty(self):  # type: ignore[override]
+        """Delegate TTY detection to the wrapped stream when possible."""
+
         method = getattr(self._stream, "isatty", None)
         if callable(method):
             return method()
         return False
 
     def readable(self):  # type: ignore[override]
+        """Mirror the wrapped stream readability capability."""
+
         method = getattr(self._stream, "readable", None)
         if callable(method):
             return method()
         return False
 
     def writable(self):  # type: ignore[override]
+        """Advertise write support because this wrapper only proxies writes."""
+
         return True
 
     def seekable(self):  # type: ignore[override]
+        """Mirror the wrapped stream seekability when available."""
+
         method = getattr(self._stream, "seekable", None)
         if callable(method):
             return method()
         return False
 
     def _drain_worker(self) -> None:
+        """Continuously drain queued writes, flushes, and close requests."""
+
         while True:
             action, payload, event = self._queue.get()
 
@@ -134,10 +158,14 @@ class QueueingStdout:
                 event.set()
 
     def __getattr__(self, item):
+        """Fall back to the wrapped stream for unknown attributes."""
+
         return getattr(self._stream, item)
 
 
 def _stdout_is_buffered(stream: object) -> bool:
+    """Heuristically detect streams that already provide useful buffering."""
+
     if getattr(stream, "_logbar_queue_wrapped", False):
         return True
 
@@ -153,6 +181,8 @@ def _stdout_is_buffered(stream: object) -> bool:
 
 
 def get_buffered_stdout(stream: Optional[object] = None) -> object:
+    """Return a cached queueing wrapper only when the stream needs one."""
+
     base = stream if stream is not None else sys.stdout
 
     if getattr(base, "_logbar_queue_wrapped", False):

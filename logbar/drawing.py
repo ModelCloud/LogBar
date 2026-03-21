@@ -49,34 +49,46 @@ _ANSI_BASIC_FG = {
 
 @lru_cache(maxsize=8192)
 def strip_ansi(text: str) -> str:
+    """Remove ANSI control sequences while leaving printable text intact."""
+
     return ANSI_ESCAPE_RE.sub("", text)
 
 
 @lru_cache(maxsize=4096)
 def _is_variation_selector(char: str) -> bool:
+    """Return whether the codepoint is an emoji/text variation selector."""
+
     codepoint = ord(char)
     return 0xFE00 <= codepoint <= 0xFE0F or 0xE0100 <= codepoint <= 0xE01EF
 
 
 @lru_cache(maxsize=4096)
 def _is_regional_indicator(char: str) -> bool:
+    """Return whether the codepoint participates in flag emoji pairs."""
+
     codepoint = ord(char)
     return 0x1F1E6 <= codepoint <= 0x1F1FF
 
 
 @lru_cache(maxsize=4096)
 def _is_emoji_modifier(char: str) -> bool:
+    """Return whether the codepoint is a Fitzpatrick emoji modifier."""
+
     codepoint = ord(char)
     return 0x1F3FB <= codepoint <= 0x1F3FF
 
 
 @lru_cache(maxsize=4096)
 def _is_keycap_base(char: str) -> bool:
+    """Return whether the character can start a keycap grapheme."""
+
     return char.isdigit() or char in {"#", "*"}
 
 
 @lru_cache(maxsize=4096)
 def _is_combining_like(char: str) -> bool:
+    """Treat combining marks and zero-width formatting chars as widthless."""
+
     if char == _ZERO_WIDTH_JOINER:
         return False
 
@@ -98,6 +110,8 @@ def _is_combining_like(char: str) -> bool:
 
 @lru_cache(maxsize=4096)
 def _can_expand_to_emoji(char: str) -> bool:
+    """Return whether emoji presentation can widen this base character."""
+
     codepoint = ord(char)
     return (
         char in {"#", "*"}
@@ -109,6 +123,8 @@ def _can_expand_to_emoji(char: str) -> bool:
 
 @lru_cache(maxsize=4096)
 def _base_cell_width(char: str) -> int:
+    """Estimate the terminal cell width for a single standalone codepoint."""
+
     if not char:
         return 0
 
@@ -132,6 +148,8 @@ def _base_cell_width(char: str) -> int:
 
 
 def _consume_plain_cluster(text: str, start: int) -> tuple[str, int]:
+    """Consume one printable grapheme-like cluster from plain text."""
+
     length = len(text)
     cluster = [text[start]]
     i = start + 1
@@ -170,6 +188,8 @@ def _consume_plain_cluster(text: str, start: int) -> tuple[str, int]:
 
 @lru_cache(maxsize=8192)
 def _cluster_cell_width(cluster: str) -> int:
+    """Estimate terminal width for one already-clustered display atom."""
+
     if not cluster:
         return 0
 
@@ -196,6 +216,8 @@ def _cluster_cell_width(cluster: str) -> int:
 
 
 def _iter_plain_clusters(text: str):
+    """Yield printable clusters from text that contains no ANSI escapes."""
+
     i = 0
     while i < len(text):
         cluster, i = _consume_plain_cluster(text, i)
@@ -203,6 +225,8 @@ def _iter_plain_clusters(text: str):
 
 
 def iter_display_atoms(text: str):
+    """Yield ANSI tokens and printable clusters with their terminal widths."""
+
     column = 0
     i = 0
     while i < len(text):
@@ -230,11 +254,15 @@ def iter_display_atoms(text: str):
 
 @lru_cache(maxsize=2048)
 def cached_display_atoms(text: str) -> tuple[tuple[bool, str, int], ...]:
+    """Memoize tokenized display atoms for hot render paths."""
+
     return tuple(iter_display_atoms(text))
 
 
 @lru_cache(maxsize=8192)
 def visible_length(text: str) -> int:
+    """Return the rendered terminal cell width of ANSI-aware text."""
+
     if not text:
         return 0
 
@@ -246,6 +274,8 @@ def visible_length(text: str) -> int:
 
 
 def iter_ansi_tokens(text: str):
+    """Yield raw ANSI escape tokens interleaved with plain characters."""
+
     i = 0
     while i < len(text):
         if text[i] == "\x1b":
@@ -260,6 +290,8 @@ def iter_ansi_tokens(text: str):
 
 @lru_cache(maxsize=1024)
 def _xterm_256_to_css(code: int) -> str:
+    """Map an xterm 256-color palette index to a CSS color string."""
+
     code = max(0, min(255, int(code)))
     if code < 16:
         table = {
@@ -296,6 +328,8 @@ def _xterm_256_to_css(code: int) -> str:
 
 @lru_cache(maxsize=4096)
 def _apply_sgr_style(bold: bool, fg_color: str, token: str) -> tuple[bool, str]:
+    """Apply one SGR token to the current bold/foreground style state."""
+
     if not token.endswith("m"):
         return bold, fg_color
 
@@ -334,6 +368,8 @@ def _apply_sgr_style(bold: bool, fg_color: str, token: str) -> tuple[bool, str]:
 
 @lru_cache(maxsize=4096)
 def _inline_css_style(bold: bool, fg_color: str) -> str:
+    """Serialize the active text style into an inline CSS fragment."""
+
     parts = []
     if bold:
         parts.append("font-weight:700")
@@ -343,6 +379,8 @@ def _inline_css_style(bold: bool, fg_color: str) -> str:
 
 
 def ansi_to_html(text: str) -> str:
+    """Convert ANSI-colored text into HTML spans for notebook rendering."""
+
     if not text:
         return ""
 
@@ -392,6 +430,8 @@ def ansi_to_html(text: str) -> str:
 
 @lru_cache(maxsize=8192)
 def truncate_ansi(text: str, limit: int) -> str:
+    """Clip ANSI-styled text to a rendered cell-width limit."""
+
     if limit <= 0:
         return ANSI_RESET
 
@@ -417,6 +457,8 @@ def truncate_ansi(text: str, limit: int) -> str:
 
 @dataclass(frozen=True)
 class BarRenderResult:
+    """Pair the plain and styled forms of one rendered bar snapshot."""
+
     plain: str
     rendered: str
 
@@ -440,6 +482,8 @@ class CellBarRenderer:
         empty_color: str = "",
         head_color: Optional[str] = None,
     ) -> BarRenderResult:
+        """Render a bar using whole filled and empty cell counts."""
+
         filled = max(0, int(filled))
         empty = max(0, int(empty))
         return self.render_units(
@@ -459,6 +503,8 @@ class CellBarRenderer:
         empty_color: str = "",
         head_color: Optional[str] = None,
     ) -> BarRenderResult:
+        """Render a bar using sub-cell fill units for smoother progress."""
+
         width = max(0, int(total_cells))
         resolution = max(1, int(self.units_per_cell))
 
@@ -503,6 +549,8 @@ class CellBarRenderer:
         return BarRenderResult(plain=plain, rendered="".join(rendered_segments))
 
     def _cell_char(self, idx: int, full_cells: int, partial_units: int) -> str:
+        """Pick the visible glyph for a single cell of the bar."""
+
         if idx < full_cells:
             if self.head_char and partial_units == 0 and idx == full_cells - 1:
                 return self.head_char
@@ -514,6 +562,8 @@ class CellBarRenderer:
         return self.empty_char
 
     def _partial_char(self, partial_units: int) -> str:
+        """Convert a partial fill amount into the closest ramp character."""
+
         if not self.partial_chars:
             return self.fill_char
 
