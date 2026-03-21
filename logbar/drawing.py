@@ -391,6 +391,8 @@ def ansi_to_html(text: str) -> str:
     cursor = 0
 
     def _append_plain(chunk: str) -> None:
+        """Append escaped plain text under the current ANSI-derived style."""
+
         nonlocal span_open
         if not chunk:
             return

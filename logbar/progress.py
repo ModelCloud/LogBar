@@ -253,6 +253,8 @@ def _register_default_styles() -> dict[str, ProgressStyle]:
     styles = {}
 
     def add(style: ProgressStyle):
+        """Register one built-in style by name in the local style map."""
+
         styles[style.name] = style
 
     add(
@@ -707,6 +709,8 @@ class ProgressBar:
         if callable(acquire) and callable(release):
             @contextmanager
             def _managed_lock():
+                """Normalize bare acquire/release locks into a context manager."""
+
                 acquire()
                 try:
                     yield lock_obj
@@ -742,6 +746,8 @@ class ProgressBar:
                 if callable(acquire) and callable(release):
                     @contextmanager
                     def _state_lock_ctx():
+                        """Wrap the shared state lock in a context manager interface."""
+
                         acquire()
                         try:
                             yield
@@ -1040,6 +1046,8 @@ class ProgressBar:
         segments_rendered = []
 
         def append_segment(text: str, rendered: Optional[str] = None, plain: Optional[str] = None):
+            """Accumulate plain and styled output in lockstep for width accounting."""
+
             segments_plain.append(plain if plain is not None else text)
             segments_rendered.append(rendered if rendered is not None else text)
 

@@ -22,6 +22,8 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def extract_rendered_lines(buffer: str):
+    """Split captured terminal output into visible lines without ANSI escapes."""
+
     cleaned = ANSI_ESCAPE_RE.sub('', buffer)
     lines = []
     accumulator = []
@@ -41,21 +43,30 @@ def extract_rendered_lines(buffer: str):
 
 
 class TestProgressBar(unittest.TestCase):
+    """Regression coverage for logger/progress stack interactions."""
 
     def capture_log(self, callable_, *args, **kwargs):
+        """Capture stdout produced by one logging call."""
+
         buffer = io.StringIO()
         with redirect_stdout(buffer):
             callable_(*args, **kwargs)
         return buffer.getvalue()
 
     def test_log_simple(self):
+        """Emit a basic log line through the shared logger."""
+
         log.info("hello info")
 
     def test_log_once(self):
+        """Suppress duplicate messages through the `.once()` helper."""
+
         log.info.once("hello info 1")
         log.info.once("hello info 1")
 
     def test_levels(self):
+        """Exercise all custom level helpers once."""
+
         log.info("hello info")
         log.debug("hello debug")
         log.warn("hello warn")
@@ -63,10 +74,14 @@ class TestProgressBar(unittest.TestCase):
         log.critical("hello critical")
 
     def test_set_level_string_filters_custom_helpers(self):
+        """Honor string log levels when filtering custom helper methods."""
+
         local_log = LogBar("test_set_level_string_filters_custom_helpers")
         local_log.setLevel("ERROR")
 
         def emit():
+            """Emit a mix of levels so filtering can be asserted."""
+
             local_log.debug("debug hidden token")
             local_log.info("info hidden token")
             local_log.error("error visible token")
@@ -77,10 +92,14 @@ class TestProgressBar(unittest.TestCase):
         self.assertNotIn("info hidden token", output)
 
     def test_set_level_filters_custom_helpers(self):
+        """Honor stdlib numeric log levels for custom helper methods."""
+
         local_log = LogBar("test_set_level_filters_custom_helpers")
         local_log.setLevel(logging.WARNING)
 
         def emit():
+            """Emit info and warn lines under a warning threshold."""
+
             local_log.info("info hidden by setLevel")
             local_log.warn("warn visible by setLevel")
 
@@ -89,11 +108,15 @@ class TestProgressBar(unittest.TestCase):
         self.assertNotIn("info hidden by setLevel", output)
 
     def test_set_level_logbar_warning_alias_filters_custom_helpers(self):
+        """Treat `LogBar.WARNING` as an alias for `logging.WARNING`."""
+
         local_log = LogBar("test_set_level_logbar_warning_alias_filters_custom_helpers")
         self.assertEqual(LogBar.WARNING, logging.WARNING)
         local_log.setLevel(LogBar.WARNING)
 
         def emit():
+            """Emit info and warn lines under the LogBar warning alias."""
+
             local_log.info("info hidden by LogBar.WARNING")
             local_log.warn("warn visible by LogBar.WARNING")
 
@@ -102,6 +125,8 @@ class TestProgressBar(unittest.TestCase):
         self.assertNotIn("info hidden by LogBar.WARNING", output)
 
     def test_set_level_rejects_unknown_names(self):
+        """Reject unsupported symbolic level names with a clear error."""
+
         local_log = LogBar("test_set_level_rejects_unknown_names")
         with self.assertRaises(ValueError):
             local_log.setLevel("TRACE")
@@ -120,6 +145,8 @@ class TestProgressBar(unittest.TestCase):
         self.assertIn("logging without terminal", stdout.getvalue())
 
     def test_log_plain_stream_omits_ansi_sequences(self):
+        """Avoid leaking ANSI prefixes when stdout is not a TTY."""
+
         stdout = io.StringIO()
 
         with mock.patch('sys.stdout', stdout), \
@@ -131,10 +158,14 @@ class TestProgressBar(unittest.TestCase):
         self.assertNotIn("\033[", output)
 
     def test_percent_formatting(self):
+        """Support classic printf-style formatting with one positional arg."""
+
         output = self.capture_log(log.info, "%d", 123)
         self.assertIn("123", output)
 
     def test_percent_formatting_multiple_args(self):
+        """Support a range of `%`-formatting patterns and argument shapes."""
+
         cases = [
             ("Numbers: %d %d %d", (1, 2, 3)),
             ("Signed and padded: %+d %05d", (42, 7)),
@@ -154,6 +185,8 @@ class TestProgressBar(unittest.TestCase):
             self.assertIn(expected, output)
 
     def test_argument_variants(self):
+        """Support mixed formatting and plain argument concatenation cases."""
+
         cases = [
             (("simple string",), "simple string"),
             (("formated string %d", 123), "formated string 123"),
@@ -168,11 +201,15 @@ class TestProgressBar(unittest.TestCase):
                 self.assertIn(expected, output)
 
     def test_concurrent_logging_thread_safe(self):
+        """Serialize concurrent log writers without dropping messages."""
+
         thread_count = 5
         iterations = 20
         barrier = threading.Barrier(thread_count)
 
         def worker(thread_idx: int) -> None:
+            """Synchronize thread start so concurrent logging overlaps heavily."""
+
             barrier.wait()
             for i in range(iterations):
                 log.info(f"thread-{thread_idx}-{i}")
@@ -194,25 +231,39 @@ class TestProgressBar(unittest.TestCase):
             self.assertIn("thread-", line)
 
     def test_stdout_wrapped_when_unbuffered(self):
+        """Wrap unbuffered-like streams in the queueing stdout proxy."""
+
         class CollectingStream:
+            """Collect writes while exposing the minimal stdout interface."""
+
             def __init__(self):
+                """Initialize write history and thread metadata capture."""
+
                 self._writes = []
                 self._lock = threading.Lock()
                 self.callers = []
 
             def write(self, data):
+                """Record the write payload and the worker thread name."""
+
                 with self._lock:
                     self._writes.append(data)
                     self.callers.append(threading.current_thread().name)
                 return len(data)
 
             def flush(self):
+                """No-op flush to satisfy the file-like contract."""
+
                 return None
 
             def isatty(self):
+                """Report a plain non-TTY stream."""
+
                 return False
 
             def getvalue(self):
+                """Return the concatenated captured output."""
+
                 with self._lock:
                     return ''.join(self._writes)
 
@@ -238,19 +289,31 @@ class TestProgressBar(unittest.TestCase):
             sys.stdout = original_stdout
 
     def test_logging_above_active_progress_stack_avoids_scroll_clear_path(self):
+        """Insert logs above a live stack without using the old scroll-clear path."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
             def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered
                 return rendered
@@ -288,19 +351,31 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_logging_above_active_progress_stack_forces_full_redraw(self):
+        """Invalidate the diff renderer after a log lands above the stack."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
             def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered
                 return rendered
@@ -337,19 +412,31 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_fullscreen_progress_stack_defers_logs_until_clear(self):
+        """Buffer logs when the stack already occupies the full terminal height."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
             def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered
                 return rendered
@@ -392,19 +479,31 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_progress_stack_reclips_after_terminal_resize(self):
+        """Clip the visible stack to the newest terminal height after resize."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
             def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered
                 return rendered
@@ -414,6 +513,8 @@ class TestProgressBar(unittest.TestCase):
         buffer = TTYBuffer()
 
         def terminal_size_provider():
+            """Return the current mocked terminal size for the resize scenario."""
+
             return current_size[0]
 
         try:
@@ -442,19 +543,31 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_progress_stack_skips_noop_redraw_for_identical_frame(self):
+        """Avoid emitting terminal output when the stack frame is unchanged."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
             def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered
                 return rendered
@@ -491,19 +604,31 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_progress_stack_redraws_only_dirty_rows(self):
+        """Rewrite only changed rows when the stack footprint is stable."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
             def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered
                 return rendered
@@ -543,19 +668,31 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_progress_stack_groups_contiguous_dirty_rows_into_one_rewrite_block(self):
+        """Coalesce adjacent dirty rows into one cursor-movement block."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
             def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered
                 return rendered
@@ -597,14 +734,24 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_progress_stack_uses_cached_lines_for_dirty_tracked_renderables(self):
+        """Reuse cached lines for unchanged renderables that opt into dirty tracking."""
+
         from logbar import logbar as logbar_module
 
         class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
             def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
                 return True
 
         class DirtyTrackedRenderable:
+            """Renderable that records how often the renderer recomputes it."""
+
             def __init__(self, line: str):
+                """Store the line content and enable dirty-tracking semantics."""
+
                 self.line = line
                 self.closed = False
                 self._last_rendered_line = ""
@@ -612,6 +759,8 @@ class TestProgressBar(unittest.TestCase):
                 self.render_calls = 0
 
             def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
                 self.render_calls += 1
                 rendered = self.line[:columns].ljust(columns)
                 self._last_rendered_line = rendered

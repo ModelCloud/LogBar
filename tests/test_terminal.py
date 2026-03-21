@@ -17,7 +17,11 @@ class TestTerminal(unittest.TestCase):
         """Prefer `os.get_terminal_size(fileno)` over the generic shutil fallback."""
 
         class StreamWithFileno:
+            """Minimal stream stub exposing only `fileno()`."""
+
             def fileno(self):
+                """Return a fake file descriptor for the terminal-size probe."""
+
                 return 17
 
         stream = StreamWithFileno()
@@ -33,10 +37,16 @@ class TestTerminal(unittest.TestCase):
         """Keep cursor support independent from notebook and TTY mode rules."""
 
         class FakeStream:
+            """TTY stub used to drive cursor-policy branches."""
+
             def __init__(self, is_tty: bool):
+                """Record whether this fake stream should report TTY mode."""
+
                 self._is_tty = is_tty
 
             def isatty(self):
+                """Expose the configured TTY state."""
+
                 return self._is_tty
 
         size_provider = lambda: (90, 33)
@@ -69,10 +79,16 @@ class TestTerminal(unittest.TestCase):
         """Allow styling, ANSI, and cursor policies to diverge when configured."""
 
         class FakeStream:
+            """TTY stub used to drive ANSI and styling policy branches."""
+
             def __init__(self, is_tty: bool):
+                """Record whether this fake stream should report TTY mode."""
+
                 self._is_tty = is_tty
 
             def isatty(self):
+                """Expose the configured TTY state."""
+
                 return self._is_tty
 
         size_provider = lambda: (72, 20)

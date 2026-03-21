@@ -67,6 +67,8 @@ def _current_render_backend_state(columns_hint: Optional[int] = None) -> RenderB
 
     if columns_hint is not None:
         def _size_provider():
+            """Reuse the live row count while forcing a caller-supplied width."""
+
             _, lines = terminal_size()
             return (columns_hint, lines)
     else:
@@ -1272,6 +1274,8 @@ class LogBar(logging.Logger):
         parts = []
 
         def consume_format(fmt, available):
+            """Consume the longest prefix of args that satisfies one format string."""
+
             if not isinstance(fmt, str):
                 return str(fmt), 0
 

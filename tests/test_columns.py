@@ -126,12 +126,18 @@ def test_columns_support_other_levels(capsys):
     buffer = io.StringIO()
 
     class Tee(io.TextIOBase):
+        """Mirror captured output to both pytest and an in-memory buffer."""
+
         def write(self, data):
+            """Forward writes to the real stdout and the capture buffer."""
+
             sys.__stdout__.write(data)
             buffer.write(data)
             return len(data)
 
         def flush(self):
+            """Flush both mirrored output targets."""
+
             sys.__stdout__.flush()
             buffer.flush()
 
