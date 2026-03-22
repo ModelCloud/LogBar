@@ -266,28 +266,17 @@ class RenderCoordinator:
     ) -> list[str]:
         """Resolve and render the default root region as visible terminal rows."""
 
-        root_viewport = viewport
-        if root_viewport is None:
-            if columns is None or lines is None:
-                raise ValueError("columns and lines are required when viewport is not provided.")
-            root_viewport = self.root_viewport(columns=columns, lines=lines)
-
-        resolved = self.resolve_registered_regions(viewport=root_viewport)
-        if len(resolved) != 1 or resolved[0].viewport != root_viewport:
-            raise ValueError("compose_root_lines requires a single region that occupies the root viewport.")
-
-        region = resolved[0].region
+        resolved_layout = self._resolve_single_root_layout(columns=columns, lines=lines, viewport=viewport)
+        resolved_region = resolved_layout.regions[0]
+        region = resolved_region.region
         render_lines = getattr(region, "render_lines", None)
         if not callable(render_lines):
-            raise TypeError(f"Registered root region {resolved[0].region_id!r} does not provide render_lines(context).")
-
-        lines_out = render_lines(
-            RenderContext(
-                viewport=root_viewport,
-                root_viewport=root_viewport,
-                style_enabled=style_enabled,
+            raise TypeError(
+                f"Registered root region {resolved_region.region_id!r} does not provide render_lines(context)."
             )
-        )
+
+        _, context = next(self._iter_render_contexts(resolved_layout, style_enabled=style_enabled))
+        lines_out = render_lines(context)
         return [str(line) for line in lines_out]
 
     def compose_layout_lines(
@@ -371,6 +360,20 @@ class RenderCoordinator:
             layout=resolved_layout,
             regions=resolved_regions,
         )
+
+    def _resolve_single_root_layout(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+    ) -> ResolvedCoordinatorLayout:
+        """Resolve one registered layout that must occupy the whole root viewport."""
+
+        resolved_layout = self._resolve_registered_layout(columns=columns, lines=lines, viewport=viewport)
+        if len(resolved_layout.regions) != 1 or resolved_layout.regions[0].viewport != resolved_layout.root_viewport:
+            raise ValueError("compose_root_lines requires a single region that occupies the root viewport.")
+        return resolved_layout
 
     def _resolve_root_viewport(
         self,

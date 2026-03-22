@@ -5,22 +5,13 @@
 
 """Tests for high-level split-pane region screen sessions."""
 
-import io
 import time
 import unittest
 from unittest import mock
 
 from logbar.layout import LeafNode, SplitDirection, SplitNode, rows
 from logbar.session import RegionScreenSession
-
-
-class _FakeTTY(io.StringIO):
-    """String buffer that reports TTY support for ANSI render tests."""
-
-    def isatty(self):
-        """Pretend to be a cursor-capable terminal."""
-
-        return True
+from tests._stream_helpers import FakeTTY
 
 
 class TestRegionScreenSession(unittest.TestCase):
@@ -29,7 +20,7 @@ class TestRegionScreenSession(unittest.TestCase):
     def test_session_auto_renders_after_log_and_footer_mutations(self):
         """Auto-render sessions should repaint after logger state changes."""
 
-        stream = _FakeTTY()
+        stream = FakeTTY()
         session = RegionScreenSession(
             layout_root=SplitNode(
                 direction=SplitDirection.LEFT_RIGHT,
@@ -63,7 +54,7 @@ class TestRegionScreenSession(unittest.TestCase):
     def test_session_manual_render_mode_defers_output_until_render_called(self):
         """Manual sessions should not repaint until explicitly asked."""
 
-        stream = _FakeTTY()
+        stream = FakeTTY()
         session = RegionScreenSession(
             stream=stream,
             size_provider=lambda: (20, 2),
@@ -93,7 +84,7 @@ class TestRegionScreenSession(unittest.TestCase):
     def test_session_context_manager_restores_terminal_state(self):
         """Leaving the session scope should restore cursor and alt-screen state."""
 
-        stream = _FakeTTY()
+        stream = FakeTTY()
         with RegionScreenSession(
             stream=stream,
             size_provider=lambda: (20, 1),
@@ -112,7 +103,7 @@ class TestRegionScreenSession(unittest.TestCase):
 
         with mock.patch.dict("logbar.terminal.os.environ", {"NO_COLOR": "1"}, clear=True), \
              mock.patch("logbar.progress.time.time", return_value=100.0):
-            stream = _FakeTTY()
+            stream = FakeTTY()
             session = RegionScreenSession(
                 stream=stream,
                 size_provider=lambda: (80, 2),
@@ -156,7 +147,7 @@ class TestRegionScreenSession(unittest.TestCase):
         with mock.patch.dict("logbar.terminal.os.environ", {"NO_COLOR": "1"}, clear=True), \
              mock.patch("logbar.progress.time.time", return_value=100.0):
             session = RegionScreenSession(
-                stream=_FakeTTY(),
+                stream=FakeTTY(),
                 size_provider=lambda: (80, 2),
                 use_alternate_screen=False,
                 auto_render=False,
@@ -175,7 +166,7 @@ class TestRegionScreenSession(unittest.TestCase):
     def test_session_columns_helper_builds_nested_public_layouts(self):
         """Public session helpers should create split sessions without raw layout nodes."""
 
-        stream = _FakeTTY()
+        stream = FakeTTY()
         session = RegionScreenSession.columns(
             "left",
             rows("right_top", "right_bottom"),

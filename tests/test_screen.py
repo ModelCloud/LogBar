@@ -5,31 +5,13 @@
 
 """Tests for the experimental region-composed ANSI screen backend."""
 
-import io
 import unittest
 
 from logbar.coordinator import RenderCoordinator
 from logbar.layout import LeafNode, SplitDirection, SplitNode
 from logbar.screen import RegionScreen
 from logbar.terminal import RenderBackendState
-
-
-class _FakeTTY(io.StringIO):
-    """String buffer that reports TTY support for ANSI render tests."""
-
-    def isatty(self):
-        """Pretend to be a cursor-capable terminal."""
-
-        return True
-
-
-class _FakePipe(io.StringIO):
-    """String buffer that behaves like a plain redirected stream."""
-
-    def isatty(self):
-        """Report non-interactive stream mode."""
-
-        return False
+from tests._stream_helpers import FakePipe, FakeTTY
 
 
 class _RecordingBackend:
@@ -108,7 +90,7 @@ class TestRegionScreen(unittest.TestCase):
         left_logger.info("a1")
         right_logger.warn("b1")
 
-        stream = _FakeTTY()
+        stream = FakeTTY()
         screen = RegionScreen(
             coordinator,
             stream=stream,
@@ -147,7 +129,7 @@ class TestRegionScreen(unittest.TestCase):
         left_logger.info("a1")
         right_logger.warn("b1")
 
-        stream = _FakeTTY()
+        stream = FakeTTY()
         screen = RegionScreen(
             coordinator,
             stream=stream,
@@ -185,7 +167,7 @@ class TestRegionScreen(unittest.TestCase):
         logger.setLevel("INFO")
         logger.info("hello")
 
-        stream = _FakeTTY()
+        stream = FakeTTY()
         screen = RegionScreen(
             coordinator,
             stream=stream,
@@ -208,7 +190,7 @@ class TestRegionScreen(unittest.TestCase):
         logger.setLevel("INFO")
         logger.info("hello")
 
-        stream = _FakePipe()
+        stream = FakePipe()
         screen = RegionScreen(
             coordinator,
             stream=stream,

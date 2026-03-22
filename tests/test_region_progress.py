@@ -5,76 +5,13 @@
 
 """Tests for pane-local progress bars rendered through split sessions."""
 
-import io
 import time
 import unittest
 from unittest import mock
 
 from logbar.layout import LeafNode, SplitDirection, SplitNode
 from logbar.session import RegionScreenSession
-
-
-class _FakeTTY(io.StringIO):
-    """String buffer that reports TTY support for ANSI render tests."""
-
-    def isatty(self):
-        """Pretend to be a cursor-capable terminal."""
-
-        return True
-
-
-class _MirroredTTY(_FakeTTY):
-    """TTY-like buffer that can also mirror writes to a real terminal device."""
-
-    def __init__(self, mirror: io.TextIOBase | None = None):
-        """Capture output in-memory while optionally forwarding it live."""
-
-        super().__init__()
-        self._mirror = mirror
-
-    def write(self, s):
-        """Write to the in-memory buffer and the live terminal when present."""
-
-        if self._mirror is not None:
-            self._mirror.write(s)
-            self._mirror.flush()
-        return super().write(s)
-
-    def flush(self):
-        """Flush the mirrored terminal stream if one is attached."""
-
-        if self._mirror is not None:
-            self._mirror.flush()
-        return super().flush()
-
-    def fileno(self):
-        """Expose the mirrored terminal file descriptor for size probing."""
-
-        if self._mirror is None:
-            raise OSError("No mirrored terminal is attached.")
-        return self._mirror.fileno()
-
-    def close(self):
-        """Close the mirrored terminal handle after the buffered stream ends."""
-
-        mirror = self._mirror
-        self._mirror = None
-        try:
-            if mirror is not None:
-                mirror.flush()
-                mirror.close()
-        finally:
-            return super().close()
-
-
-def _real_terminal_stream():
-    """Return a live terminal-backed buffer when `/dev/tty` is available."""
-
-    try:
-        mirror = open("/dev/tty", "w", buffering=1, encoding="utf-8", errors="replace")
-    except OSError:
-        return _FakeTTY()
-    return _MirroredTTY(mirror=mirror)
+from tests._stream_helpers import FakeTTY, MirroredTTY, real_terminal_stream
 
 
 class TestRegionProgress(unittest.TestCase):
@@ -89,7 +26,7 @@ class TestRegionProgress(unittest.TestCase):
                 "left",
                 "right",
                 weights=(1, 1),
-                stream=_FakeTTY(),
+                stream=FakeTTY(),
                 size_provider=lambda: (80, 8),
                 use_alternate_screen=False,
                 auto_render=False,
@@ -193,13 +130,13 @@ class TestRegionProgress(unittest.TestCase):
         """Run one human-followable split session for 15 seconds with staggered pane activity."""
 
         with mock.patch.dict("logbar.terminal.os.environ", {"NO_COLOR": "1"}, clear=True):
-            stream = _real_terminal_stream()
+            stream = real_terminal_stream()
             session = RegionScreenSession.columns(
                 "left",
                 "right",
                 weights=(1, 1),
                 stream=stream,
-                use_alternate_screen=isinstance(stream, _MirroredTTY),
+                use_alternate_screen=isinstance(stream, MirroredTTY),
                 auto_render=True,
             )
 
@@ -306,7 +243,7 @@ class TestRegionProgress(unittest.TestCase):
 
         with mock.patch.dict("logbar.terminal.os.environ", {"NO_COLOR": "1"}, clear=True), \
              mock.patch("logbar.progress.time.time", return_value=100.0):
-            stream = _FakeTTY()
+            stream = FakeTTY()
             session = RegionScreenSession(
                 stream=stream,
                 size_provider=lambda: (80, 4),
@@ -348,7 +285,7 @@ class TestRegionProgress(unittest.TestCase):
                     direction=SplitDirection.LEFT_RIGHT,
                     children=(LeafNode("left"), LeafNode("right")),
                 ),
-                stream=_FakeTTY(),
+                stream=FakeTTY(),
                 size_provider=lambda: (120, 4),
                 use_alternate_screen=False,
                 auto_render=False,
