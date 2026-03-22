@@ -9,7 +9,7 @@ import unittest
 
 from logbar.coordinator import RenderCoordinator
 from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport
-from logbar.region import LineRegion, RenderContext, TextRegion
+from logbar.region import LineRegion, LogRegion, RenderContext, TextRegion
 
 
 class TestRegion(unittest.TestCase):
@@ -74,4 +74,48 @@ class TestRegion(unittest.TestCase):
             "left    ",
             "body    ",
             "    tail",
+        ])
+
+    def test_log_region_renders_body_above_footer(self):
+        """Pane regions should keep footer rows anchored at the bottom."""
+
+        region = LogRegion(
+            ["body-1", "body-2", "body-3"],
+            footer_lines=["foot-1", "foot-2"],
+        )
+
+        rows = region.render_lines(
+            RenderContext(
+                viewport=Viewport(0, 0, 8, 4),
+                root_viewport=Viewport(0, 0, 8, 4),
+            )
+        )
+
+        self.assertEqual(rows, [
+            "body-2",
+            "body-3",
+            "foot-1",
+            "foot-2",
+        ])
+
+    def test_log_region_bottom_aligns_short_body_area(self):
+        """Short body content should stay nearest the footer within remaining space."""
+
+        region = LogRegion(
+            ["body-only"],
+            footer_lines=["foot"],
+        )
+
+        rows = region.render_lines(
+            RenderContext(
+                viewport=Viewport(0, 0, 8, 4),
+                root_viewport=Viewport(0, 0, 8, 4),
+            )
+        )
+
+        self.assertEqual(rows, [
+            "",
+            "",
+            "body-only",
+            "foot",
         ])

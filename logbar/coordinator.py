@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Sequence
 
-from .drawing import ANSI_RESET, truncate_ansi, visible_length
+from .drawing import ANSI_RESET, strip_ansi, truncate_ansi, visible_length
 from .frame import CellBuffer
 from .layout import LeafNode, LayoutNode, Viewport, resolve_layout as resolve_region_layout
 from .region import RenderContext
@@ -353,7 +353,15 @@ class RenderCoordinator:
                 f"Registered region {resolved.region_id!r} does not provide render_lines(context)."
             )
 
-        return [str(line) for line in render_lines(context)]
+        lines_out = [str(line) for line in render_lines(context)]
+        max_rows = max(0, int(context.viewport.height))
+        if len(lines_out) <= max_rows:
+            return lines_out
+
+        anchor = getattr(resolved.region, "vertical_anchor", "top")
+        if anchor == "bottom":
+            return lines_out[-max_rows:]
+        return lines_out[:max_rows]
 
     @staticmethod
     def _line_region_start_row(region: object, height: int, line_count: int) -> int:
@@ -378,7 +386,10 @@ class RenderCoordinator:
         rendered = str(line)
         current_width = visible_length(rendered)
         if current_width > width:
-            return truncate_ansi(rendered, width)
+            clipped = truncate_ansi(rendered, width)
+            if "\033[" not in rendered:
+                return strip_ansi(clipped)
+            return clipped
         if current_width < width:
             pad = " " * (width - current_width)
             if "\033[" in rendered and not rendered.endswith(ANSI_RESET):

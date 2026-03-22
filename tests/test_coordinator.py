@@ -10,7 +10,7 @@ import unittest
 from logbar.coordinator import DEFAULT_ROOT_REGION_ID, RenderCoordinator
 from logbar.drawing import strip_ansi
 from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport
-from logbar.region import LineRegion
+from logbar.region import LineRegion, LogRegion
 
 
 class TestRenderCoordinator(unittest.TestCase):
@@ -203,3 +203,40 @@ class TestRenderCoordinator(unittest.TestCase):
         rows = coordinator.compose_layout_lines(columns=6, lines=1)
 
         self.assertEqual(strip_ansi(rows[0]), "A  B  ")
+
+    def test_compose_layout_lines_supports_log_regions_with_footer(self):
+        """The line compositor should preserve body/footer semantics inside panes."""
+
+        coordinator = RenderCoordinator()
+        coordinator.set_layout(
+            SplitNode(
+                direction=SplitDirection.LEFT_RIGHT,
+                children=(
+                    LeafNode("left"),
+                    LeafNode("right"),
+                ),
+            )
+        )
+        coordinator.register_region(
+            "left",
+            LogRegion(
+                ["l-body-1", "l-body-2"],
+                footer_lines=["l-foot"],
+            ),
+        )
+        coordinator.register_region(
+            "right",
+            LogRegion(
+                ["r-body"],
+                footer_lines=["r-foot-1", "r-foot-2"],
+            ),
+        )
+
+        rows = coordinator.compose_layout_lines(columns=12, lines=4)
+
+        self.assertEqual(rows, [
+            "            ",
+            "l-bodyr-body",
+            "l-bodyr-foot",
+            "l-footr-foot",
+        ])
