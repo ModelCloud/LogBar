@@ -9,13 +9,16 @@ from .logbar import LogBar
 from .region_logger import RegionLogBar
 from .region_progress import RegionProgressBar, RegionRollingProgressBar
 from .screen import RegionScreen
+from .screen_backend import AnsiRegionScreenBackend, RegionScreenBackend
 from .session import RegionScreenSession
 
 __all__ = [
+    "AnsiRegionScreenBackend",
     "LogBar",
     "RegionLogBar",
     "RegionProgressBar",
     "RegionRollingProgressBar",
     "RegionScreen",
+    "RegionScreenBackend",
     "RegionScreenSession",
 ]

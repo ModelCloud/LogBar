@@ -11,6 +11,7 @@ import unittest
 from logbar.coordinator import RenderCoordinator
 from logbar.layout import LeafNode, SplitDirection, SplitNode
 from logbar.screen import RegionScreen
+from logbar.terminal import RenderBackendState
 
 
 class _FakeTTY(io.StringIO):
@@ -31,8 +32,64 @@ class _FakePipe(io.StringIO):
         return False
 
 
+class _RecordingBackend:
+    """Small fake backend used to prove RegionScreen delegates backend I/O."""
+
+    def __init__(self):
+        """Capture all render calls for assertions."""
+
+        self.calls = []
+        self.closed = False
+        self._state = RenderBackendState(
+            columns=12,
+            lines=2,
+            is_tty=False,
+            notebook=False,
+            supports_cursor=False,
+            supports_ansi=False,
+            supports_styling=False,
+        )
+
+    def backend_state(self):
+        """Return one stable backend snapshot."""
+
+        return self._state
+
+    def render_lines(self, lines, *, backend_state=None):
+        """Record the composed frame that RegionScreen asked to paint."""
+
+        self.calls.append((list(lines), backend_state))
+
+    def close(self):
+        """Record backend shutdown."""
+
+        self.closed = True
+
+
 class TestRegionScreen(unittest.TestCase):
     """Coverage for the explicit region-composed terminal backend."""
+
+    def test_region_screen_can_delegate_to_a_custom_backend(self):
+        """RegionScreen should compose rows itself and delegate I/O to its backend."""
+
+        coordinator = RenderCoordinator()
+        logger = coordinator.create_region_logger(coordinator.root_region_id, supports_ansi=False)
+        logger.setLevel("INFO")
+        logger.info("hello")
+
+        backend = _RecordingBackend()
+        screen = RegionScreen(coordinator, backend=backend)
+
+        rows = screen.render()
+
+        self.assertEqual(rows, ["            ", "INFO  hello "])
+        self.assertEqual(backend.calls, [
+            (["            ", "INFO  hello "], backend.backend_state()),
+        ])
+
+        screen.close()
+
+        self.assertTrue(backend.closed)
 
     def test_region_screen_first_render_enters_alt_screen_and_paints_full_frame(self):
         """First render should enter alt-screen mode and draw every row."""
