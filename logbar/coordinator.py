@@ -7,10 +7,25 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Sequence
+from dataclasses import dataclass
+from typing import Callable, Dict, Optional, Sequence
+
+from .frame import CellBuffer
+from .layout import LeafNode, LayoutNode, Viewport, resolve_layout as resolve_region_layout
+from .region import RenderContext
 
 
 StateChangeCallback = Callable[[str, object], None]
+DEFAULT_ROOT_REGION_ID = "root"
+
+
+@dataclass(frozen=True)
+class ResolvedRegion:
+    """Bind one registered region object to its resolved terminal rectangle."""
+
+    region_id: str
+    region: object
+    viewport: Viewport
 
 
 class RenderCoordinatorState:
@@ -66,10 +81,150 @@ class RenderCoordinatorState:
 class RenderCoordinator:
     """Own the mutable render state for one LogBar terminal surface."""
 
-    def __init__(self, on_state_change: Optional[StateChangeCallback] = None) -> None:
+    def __init__(
+        self,
+        on_state_change: Optional[StateChangeCallback] = None,
+        *,
+        root_region_id: str = DEFAULT_ROOT_REGION_ID,
+    ) -> None:
         """Create a coordinator around a fresh mutable state object."""
 
+        normalized_root = str(root_region_id).strip() or DEFAULT_ROOT_REGION_ID
+        self._root_region_id = normalized_root
+        self._layout_root: LayoutNode = LeafNode(normalized_root)
+        self._regions: Dict[str, object] = {}
         self.state = RenderCoordinatorState(on_change=on_state_change)
+
+    @property
+    def root_region_id(self) -> str:
+        """Return the identifier used by the default single-region layout."""
+
+        return self._root_region_id
+
+    @property
+    def layout_root(self) -> LayoutNode:
+        """Return the current layout tree root."""
+
+        return self._layout_root
+
+    def root_viewport(self, *, columns: int, lines: int) -> Viewport:
+        """Build the coordinator's root terminal rectangle from backend dimensions."""
+
+        return Viewport(0, 0, max(0, int(columns)), max(0, int(lines)))
+
+    def set_layout(self, layout_root: Optional[LayoutNode] = None) -> LayoutNode:
+        """Install a layout tree or restore the default single-root leaf."""
+
+        self._layout_root = layout_root if layout_root is not None else LeafNode(self._root_region_id)
+        return self._layout_root
+
+    def resolve_viewports(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+    ) -> Dict[str, Viewport]:
+        """Resolve the active layout tree into concrete leaf rectangles."""
+
+        if viewport is None:
+            if columns is None or lines is None:
+                raise ValueError("columns and lines are required when viewport is not provided.")
+            viewport = self.root_viewport(columns=columns, lines=lines)
+
+        return resolve_region_layout(self._layout_root, viewport)
+
+    def register_region(self, region_id: str, region: object) -> object:
+        """Associate one region object with a layout leaf identifier."""
+
+        normalized = str(region_id).strip()
+        if not normalized:
+            raise ValueError("region_id must not be empty.")
+        self._regions[normalized] = region
+        return region
+
+    def unregister_region(self, region_id: str) -> Optional[object]:
+        """Remove one previously registered region object."""
+
+        normalized = str(region_id).strip()
+        if not normalized:
+            return None
+        return self._regions.pop(normalized, None)
+
+    def region(self, region_id: str) -> Optional[object]:
+        """Return the registered object for one region identifier."""
+
+        return self._regions.get(str(region_id).strip())
+
+    def registered_regions(self) -> Dict[str, object]:
+        """Return a defensive copy of the region registry."""
+
+        return dict(self._regions)
+
+    def resolve_registered_regions(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+    ) -> list[ResolvedRegion]:
+        """Resolve the layout tree and bind each leaf to a registered region object."""
+
+        viewports = self.resolve_viewports(columns=columns, lines=lines, viewport=viewport)
+        resolved: list[ResolvedRegion] = []
+        for region_id, region_viewport in viewports.items():
+            if region_id not in self._regions:
+                raise KeyError(f"Layout references unregistered region id: {region_id!r}")
+            resolved.append(
+                ResolvedRegion(
+                    region_id=region_id,
+                    region=self._regions[region_id],
+                    viewport=region_viewport,
+                )
+            )
+        return resolved
+
+    def compose_frame(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+        style_enabled: bool = True,
+    ) -> CellBuffer:
+        """Render all registered layout leaves into one composed root frame."""
+
+        root_viewport = viewport
+        if root_viewport is None:
+            if columns is None or lines is None:
+                raise ValueError("columns and lines are required when viewport is not provided.")
+            root_viewport = self.root_viewport(columns=columns, lines=lines)
+
+        frame = CellBuffer(root_viewport.width, root_viewport.height)
+        for resolved in self.resolve_registered_regions(viewport=root_viewport):
+            render = getattr(resolved.region, "render", None)
+            if not callable(render):
+                raise TypeError(f"Registered region {resolved.region_id!r} does not provide render(context).")
+
+            region_buffer = render(
+                RenderContext(
+                    viewport=resolved.viewport,
+                    root_viewport=root_viewport,
+                    style_enabled=style_enabled,
+                )
+            )
+            if not isinstance(region_buffer, CellBuffer):
+                raise TypeError(
+                    f"Region {resolved.region_id!r} returned {type(region_buffer)!r}; expected CellBuffer."
+                )
+
+            frame.blit(
+                region_buffer,
+                dest_x=resolved.viewport.x - root_viewport.x,
+                dest_y=resolved.viewport.y - root_viewport.y,
+            )
+
+        return frame
 
     def attach_progress_bar(self, pb: object) -> None:
         """Register one progress renderable with the coordinator."""
@@ -97,4 +252,9 @@ class RenderCoordinator:
         return list(self.state._attached_progress_bars)
 
 
-__all__ = ["RenderCoordinator", "RenderCoordinatorState"]
+__all__ = [
+    "DEFAULT_ROOT_REGION_ID",
+    "RenderCoordinator",
+    "RenderCoordinatorState",
+    "ResolvedRegion",
+]
