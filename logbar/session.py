@@ -7,12 +7,14 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple
 
 from .coordinator import RenderCoordinator
 from .layout import LayoutNode
+from .logbar import _RENDER_LOCK
 from .region import LogRegion
 from .region_logger import RegionLogBar
 from .screen import RegionScreen
@@ -64,6 +66,8 @@ class RegionScreenSession:
         size_provider: Optional[Callable[[], Tuple[int, int]]] = None,
         use_alternate_screen: bool = True,
         auto_render: bool = True,
+        background_refresh: Optional[bool] = None,
+        refresh_interval_seconds: float = 0.1,
     ) -> None:
         """Create one split-pane session with optional auto repaint."""
 
@@ -78,9 +82,16 @@ class RegionScreenSession:
             use_alternate_screen=use_alternate_screen,
         )
         self._auto_render = bool(auto_render)
+        self._background_refresh_enabled = (
+            self._auto_render if background_refresh is None else (bool(background_refresh) and self._auto_render)
+        )
+        self._refresh_interval_seconds = max(0.01, float(refresh_interval_seconds))
         self._pane_states: dict[str, _SessionPaneState] = {}
         self._dirty_progress_bars: set[object] = set()
         self._last_render_size: Optional[tuple[int, int]] = None
+        self._refresh_thread: Optional[threading.Thread] = None
+        self._refresh_thread_lock = threading.Lock()
+        self._refresh_stop_event = threading.Event()
 
     @property
     def coordinator(self) -> RenderCoordinator:
@@ -99,6 +110,12 @@ class RegionScreenSession:
         """Return whether region mutations trigger an immediate repaint."""
 
         return self._auto_render
+
+    @property
+    def background_refresh_enabled(self) -> bool:
+        """Return whether this session may auto-refresh pane progress in the background."""
+
+        return self._background_refresh_enabled
 
     def set_layout(self, layout_root: Optional[LayoutNode] = None) -> LayoutNode:
         """Replace the active layout tree and optionally repaint."""
@@ -180,21 +197,22 @@ class RegionScreenSession:
     def refresh_progress(self, *, force: bool = False) -> list[str]:
         """Advance time-based pane progress bars once and repaint the session."""
 
-        state = self._screen.backend_state()
-        now = time.monotonic()
-        size_changed = self._last_render_size != (state.columns, state.lines)
-        changed = size_changed or force
+        with _RENDER_LOCK:
+            state = self._screen.backend_state()
+            now = time.monotonic()
+            size_changed = self._last_render_size != (state.columns, state.lines)
+            changed = size_changed or force
 
-        for pane in self._pane_states.values():
-            for pb in list(pane.progress_bars):
-                tick = getattr(pb, "_tick_background_refresh", None)
-                if callable(tick) and tick(now):
-                    changed = True
+            for pane in self._pane_states.values():
+                for pb in list(pane.progress_bars):
+                    tick = getattr(pb, "_tick_background_refresh", None)
+                    if callable(tick) and tick(now):
+                        changed = True
 
-        if changed:
-            return self.render(backend_state=state, force_progress_refresh=True)
+            if changed:
+                return self.render(backend_state=state, force_progress_refresh=True)
 
-        return self._screen.compose_lines(backend_state=state)
+            return self._screen.compose_lines(backend_state=state)
 
     def render(
         self,
@@ -204,22 +222,60 @@ class RegionScreenSession:
     ) -> list[str]:
         """Render the current layout frame through the bound screen backend."""
 
-        state = backend_state or self._screen.backend_state()
-        size_changed = self._last_render_size != (state.columns, state.lines)
-        self._sync_all_pane_footers(
-            backend_state=state,
-            force=force_progress_refresh or size_changed,
-            allow_repeat=True,
-        )
-        lines = self._screen.render(backend_state=state)
-        self._last_render_size = (state.columns, state.lines)
-        return lines
+        with _RENDER_LOCK:
+            state = backend_state or self._screen.backend_state()
+            size_changed = self._last_render_size != (state.columns, state.lines)
+            self._sync_all_pane_footers(
+                backend_state=state,
+                force=force_progress_refresh or size_changed,
+                allow_repeat=True,
+            )
+            lines = self._screen.render(backend_state=state)
+            self._last_render_size = (state.columns, state.lines)
+            return lines
 
     def close(self) -> None:
         """Close the screen backend and restore the terminal state."""
 
+        self.stop_background_refresh()
         self._screen.close()
         self._last_render_size = None
+
+    def start_background_refresh(self) -> Optional[threading.Thread]:
+        """Start the session-owned progress refresher when enabled and needed."""
+
+        if not self._background_refresh_enabled or not self._has_active_progress_bars():
+            return None
+
+        with self._refresh_thread_lock:
+            if self._refresh_thread is not None and self._refresh_thread.is_alive():
+                return self._refresh_thread
+
+            self._refresh_stop_event.clear()
+            thread = threading.Thread(
+                target=self._background_refresh_worker,
+                name="logbar-region-session-refresh",
+                daemon=True,
+            )
+            self._refresh_thread = thread
+            thread.start()
+            return thread
+
+    def stop_background_refresh(self) -> None:
+        """Stop the session-owned background refresher if it is running."""
+
+        with self._refresh_thread_lock:
+            thread = self._refresh_thread
+            if thread is None:
+                return
+            self._refresh_stop_event.set()
+
+        if thread is not threading.current_thread():
+            thread.join(timeout=max(0.1, self._refresh_interval_seconds * 5))
+
+        with self._refresh_thread_lock:
+            if self._refresh_thread is thread and not thread.is_alive():
+                self._refresh_thread = None
 
     def _render_logger_change(self, logger: RegionLogBar) -> None:
         """Repaint the session after one logger mutates its region."""
@@ -347,6 +403,47 @@ class RegionScreenSession:
                     allow_repeat=allow_repeat,
                 )
 
+    def _has_active_progress_bars(self) -> bool:
+        """Return whether any pane currently owns attached progress bars."""
+
+        return any(pane.progress_bars for pane in self._pane_states.values())
+
+    def _should_refresh_in_background(self, backend_state) -> bool:
+        """Return whether the session refresher should tick under one backend."""
+
+        if not self._has_active_progress_bars():
+            return False
+
+        if backend_state.supports_cursor or backend_state.notebook:
+            return True
+
+        for pane in self._pane_states.values():
+            for pb in pane.progress_bars:
+                if callable(getattr(pb, "_tick_background_refresh", None)):
+                    return True
+
+        return False
+
+    def _background_refresh_worker(self) -> None:
+        """Advance pane-local time-based renderables until the session stops."""
+
+        while not self._refresh_stop_event.wait(self._refresh_interval_seconds):
+            if not self._has_active_progress_bars():
+                continue
+
+            try:
+                state = self._screen.backend_state()
+            except Exception:
+                continue
+
+            if not self._should_refresh_in_background(state):
+                continue
+
+            try:
+                self.refresh_progress()
+            except Exception:
+                continue
+
     def _attach_progress_bar(self, region_id: str, pb: object) -> None:
         """Register one pane-local progress bar in the target region."""
 
@@ -357,6 +454,7 @@ class RegionScreenSession:
         self._sync_pane_footer(region_id, force=True, allow_repeat=True)
         if self._auto_render:
             self.render(force_progress_refresh=True)
+        self.start_background_refresh()
 
     def _detach_progress_bar(self, region_id: str, pb: object) -> None:
         """Remove one pane-local progress bar and restore the footer layer."""
@@ -368,6 +466,8 @@ class RegionScreenSession:
         self._sync_pane_footer(region_id, force=True, allow_repeat=True)
         if self._auto_render:
             self.render(force_progress_refresh=True)
+        if not self._has_active_progress_bars():
+            self.stop_background_refresh()
 
     def _mark_progress_bar_dirty(self, region_id: str, pb: object) -> None:
         """React to one attached pane-local progress bar becoming dirty."""

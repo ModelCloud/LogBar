@@ -6,7 +6,9 @@
 """Tests for high-level split-pane region screen sessions."""
 
 import io
+import time
 import unittest
+from unittest import mock
 
 from logbar.layout import LeafNode, SplitDirection, SplitNode
 from logbar.session import RegionScreenSession
@@ -38,8 +40,8 @@ class TestRegionScreenSession(unittest.TestCase):
             use_alternate_screen=False,
             auto_render=True,
         )
-        left_logger = session.create_logger("left")
-        right_logger = session.create_logger("right")
+        left_logger = session.create_logger("left", supports_ansi=False)
+        right_logger = session.create_logger("right", supports_ansi=False)
         left_logger.setLevel("INFO")
         right_logger.setLevel("INFO")
 
@@ -104,3 +106,68 @@ class TestRegionScreenSession(unittest.TestCase):
 
         self.assertTrue(stream.getvalue().startswith("\033[?1049h\033[?25l"))
         self.assertTrue(stream.getvalue().endswith("\033[?25h\033[?1049l"))
+
+    def test_session_auto_refresh_thread_updates_spinner_and_stops_after_detach(self):
+        """Auto-render sessions should background-refresh pane-local spinners."""
+
+        with mock.patch.dict("logbar.terminal.os.environ", {"NO_COLOR": "1"}, clear=True), \
+             mock.patch("logbar.progress.time.time", return_value=100.0):
+            stream = _FakeTTY()
+            session = RegionScreenSession(
+                stream=stream,
+                size_provider=lambda: (80, 2),
+                use_alternate_screen=False,
+                auto_render=True,
+                background_refresh=True,
+                refresh_interval_seconds=0.01,
+            )
+
+            spinner = session.spinner(title="spin", interval=0.01, tail_length=2)
+            spinner.style("mono")
+
+            thread = session._refresh_thread
+            self.assertIsNotNone(thread)
+            self.assertTrue(thread.is_alive())
+
+            initial_len = len(stream.getvalue())
+            deadline = time.monotonic() + 0.3
+            while time.monotonic() < deadline and len(stream.getvalue()) <= initial_len:
+                time.sleep(0.01)
+
+            self.assertGreater(len(stream.getvalue()), initial_len)
+
+            spinner.close()
+
+            deadline = time.monotonic() + 0.3
+            while time.monotonic() < deadline:
+                thread = session._refresh_thread
+                if thread is None or not thread.is_alive():
+                    break
+                time.sleep(0.01)
+
+            thread = session._refresh_thread
+            self.assertTrue(thread is None or not thread.is_alive())
+
+            session.close()
+
+    def test_session_manual_mode_does_not_start_background_refresh_thread(self):
+        """Manual sessions should keep pane progress refresh under caller control."""
+
+        with mock.patch.dict("logbar.terminal.os.environ", {"NO_COLOR": "1"}, clear=True), \
+             mock.patch("logbar.progress.time.time", return_value=100.0):
+            session = RegionScreenSession(
+                stream=_FakeTTY(),
+                size_provider=lambda: (80, 2),
+                use_alternate_screen=False,
+                auto_render=False,
+                background_refresh=True,
+                refresh_interval_seconds=0.01,
+            )
+
+            spinner = session.spinner(title="spin", interval=0.01, tail_length=2)
+
+            self.assertFalse(session.background_refresh_enabled)
+            self.assertIsNone(session._refresh_thread)
+
+            spinner.close()
+            session.close()
