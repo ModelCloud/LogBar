@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Union
+from typing import Callable, Optional, Sequence, Union
 
 from .logbar import LEVEL, LogBar, _RENDER_LOCK, _level_prefix
 from .region import LogRegion
@@ -22,12 +22,14 @@ class RegionLogBar(LogBar):
         region: Optional[LogRegion] = None,
         *,
         supports_ansi: bool = True,
+        on_change: Optional[Callable[["RegionLogBar"], None]] = None,
     ) -> None:
         """Bind the logger to one pane region instead of the process stdout."""
 
         super().__init__(name)
         self._region = region if region is not None else LogRegion()
         self._supports_ansi = bool(supports_ansi)
+        self._on_change = on_change
 
     @property
     def region(self) -> LogRegion:
@@ -41,36 +43,47 @@ class RegionLogBar(LogBar):
 
         return self._supports_ansi
 
+    def set_on_change(self, callback: Optional[Callable[["RegionLogBar"], None]]) -> "RegionLogBar":
+        """Install or remove the callback invoked after region mutations."""
+
+        self._on_change = callback
+        return self
+
     def bind_region(self, region: LogRegion) -> "RegionLogBar":
         """Rebind the logger to a different LogRegion."""
 
         if not isinstance(region, LogRegion):
             raise TypeError("region must be a LogRegion instance.")
         self._region = region
+        self._notify_change()
         return self
 
     def set_footer_lines(self, lines: Sequence[str]) -> "RegionLogBar":
         """Replace the region footer rows."""
 
         self._region.set_footer_lines(lines)
+        self._notify_change()
         return self
 
     def append_footer_line(self, line: str) -> "RegionLogBar":
         """Append one footer row to the bound region."""
 
         self._region.append_footer_line(line)
+        self._notify_change()
         return self
 
     def clear_footer(self) -> "RegionLogBar":
         """Remove all footer content from the bound region."""
 
         self._region.clear_footer()
+        self._notify_change()
         return self
 
     def clear_body(self) -> "RegionLogBar":
         """Remove all body log rows from the bound region."""
 
         self._region.clear_body()
+        self._notify_change()
         return self
 
     def clear(self) -> "RegionLogBar":
@@ -78,6 +91,7 @@ class RegionLogBar(LogBar):
 
         self._region.clear_body()
         self._region.clear_footer()
+        self._notify_change()
         return self
 
     def _emit_log_line_locked(
@@ -118,6 +132,13 @@ class RegionLogBar(LogBar):
                 allow_defer=False,
                 backend_state=None,
             )
+            self._notify_change()
+
+    def _notify_change(self) -> None:
+        """Invoke the optional mutation callback for reactive screen sessions."""
+
+        if callable(self._on_change):
+            self._on_change(self)
 
 
 __all__ = ["RegionLogBar"]

@@ -8,5 +8,6 @@
 from .logbar import LogBar
 from .region_logger import RegionLogBar
 from .screen import RegionScreen
+from .session import RegionScreenSession
 
-__all__ = ["LogBar", "RegionLogBar", "RegionScreen"]
+__all__ = ["LogBar", "RegionLogBar", "RegionScreen", "RegionScreenSession"]
