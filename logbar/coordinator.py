@@ -356,8 +356,8 @@ class RenderCoordinator:
     ) -> ResolvedLayout:
         """Resolve the active layout tree once for a root viewport."""
 
-        root_viewport = self._resolve_root_viewport(columns=columns, lines=lines, viewport=viewport)
-        return self._layout_root.resolve(root_viewport)
+        _, resolved_layout = self._resolve_root_layout(columns=columns, lines=lines, viewport=viewport)
+        return resolved_layout
 
     def _resolve_registered_layout(
         self,
@@ -368,23 +368,15 @@ class RenderCoordinator:
     ) -> ResolvedCoordinatorLayout:
         """Resolve one layout tree and bind every leaf to a registered region."""
 
-        resolved_layout = self._resolve_layout(columns=columns, lines=lines, viewport=viewport)
-        root_viewport = self._resolve_root_viewport(columns=columns, lines=lines, viewport=viewport)
-        resolved_regions: list[ResolvedRegion] = []
-        for region_id, region_viewport in resolved_layout.viewports.items():
-            if region_id not in self._regions:
-                raise KeyError(f"Layout references unregistered region id: {region_id!r}")
-            resolved_regions.append(
-                ResolvedRegion(
-                    region_id=region_id,
-                    region=self._regions[region_id],
-                    viewport=region_viewport,
-                )
-            )
+        root_viewport, resolved_layout = self._resolve_root_layout(
+            columns=columns,
+            lines=lines,
+            viewport=viewport,
+        )
         return ResolvedCoordinatorLayout(
             root_viewport=root_viewport,
             layout=resolved_layout,
-            regions=resolved_regions,
+            regions=self._bind_registered_regions(resolved_layout),
         )
 
     def _resolve_single_root_layout(
@@ -415,6 +407,34 @@ class RenderCoordinator:
         if columns is None or lines is None:
             raise ValueError("columns and lines are required when viewport is not provided.")
         return self.root_viewport(columns=columns, lines=lines)
+
+    def _resolve_root_layout(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+    ) -> tuple[Viewport, ResolvedLayout]:
+        """Resolve the active layout tree once together with its root viewport."""
+
+        root_viewport = self._resolve_root_viewport(columns=columns, lines=lines, viewport=viewport)
+        return root_viewport, self._layout_root.resolve(root_viewport)
+
+    def _bind_registered_regions(self, resolved_layout: ResolvedLayout) -> list[ResolvedRegion]:
+        """Bind one resolved layout's leaf ids to registered region objects."""
+
+        resolved_regions: list[ResolvedRegion] = []
+        for region_id, region_viewport in resolved_layout.viewports.items():
+            if region_id not in self._regions:
+                raise KeyError(f"Layout references unregistered region id: {region_id!r}")
+            resolved_regions.append(
+                ResolvedRegion(
+                    region_id=region_id,
+                    region=self._regions[region_id],
+                    viewport=region_viewport,
+                )
+            )
+        return resolved_regions
 
     @staticmethod
     def _iter_positioned_regions(
