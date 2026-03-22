@@ -7,5 +7,6 @@
 
 from .logbar import LogBar
 from .region_logger import RegionLogBar
+from .screen import RegionScreen
 
-__all__ = ["LogBar", "RegionLogBar"]
+__all__ = ["LogBar", "RegionLogBar", "RegionScreen"]
