@@ -377,10 +377,15 @@ class RegionScreenSession:
         self._mutate_pane(region_id, mutate)
         self._sync_pane_footer(region_id)
 
+    def _route_static_footer_mutation(self, region_id: str, mutate) -> None:
+        """Apply one static-footer mutation and resync the pane footer rows."""
+
+        self._mutate_static_footer(region_id, mutate)
+
     def _set_static_footer_lines(self, region_id: str, lines) -> None:
         """Replace the pane-owned static footer layer and resync the region."""
 
-        self._mutate_static_footer(
+        self._route_static_footer_mutation(
             region_id,
             lambda pane: setattr(pane, "static_footer_lines", [str(line) for line in lines]),
         )
@@ -388,7 +393,7 @@ class RegionScreenSession:
     def _append_static_footer_line(self, region_id: str, line: str) -> None:
         """Append one line to the pane-owned static footer layer."""
 
-        self._mutate_static_footer(
+        self._route_static_footer_mutation(
             region_id,
             lambda pane: pane.static_footer_lines.append(str(line)),
         )
@@ -396,7 +401,7 @@ class RegionScreenSession:
     def _clear_static_footer(self, region_id: str) -> None:
         """Clear the pane-owned static footer layer."""
 
-        self._mutate_static_footer(
+        self._route_static_footer_mutation(
             region_id,
             lambda pane: setattr(pane, "static_footer_lines", []),
         )
