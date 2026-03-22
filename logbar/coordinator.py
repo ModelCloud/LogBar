@@ -13,7 +13,7 @@ from typing import Callable, Dict, Iterator, Optional, Sequence
 from .drawing import ANSI_RESET, strip_ansi, truncate_ansi, visible_length
 from .frame import CellBuffer
 from .layout import DividerAssignment, LeafNode, LayoutNode, ResolvedLayout, Viewport
-from .region import RenderContext
+from .region import RenderContext, clip_rendered_lines, line_region_start_row
 
 
 StateChangeCallback = Callable[[str, object], None]
@@ -300,7 +300,11 @@ class RenderCoordinator:
             if not local_lines:
                 continue
 
-            start_y = self._line_region_start_row(resolved.region, resolved.viewport.height, len(local_lines))
+            start_y = line_region_start_row(
+                height=resolved.viewport.height,
+                line_count=len(local_lines),
+                vertical_anchor=getattr(resolved.region, "vertical_anchor", "top"),
+            )
             absolute_x = resolved.viewport.x - root_viewport.x
             for offset, line in enumerate(local_lines):
                 absolute_y = (resolved.viewport.y - root_viewport.y) + start_y + offset
@@ -439,27 +443,11 @@ class RenderCoordinator:
                 f"Registered region {resolved.region_id!r} does not provide render_lines(context)."
             )
 
-        lines_out = [str(line) for line in render_lines(context)]
-        max_rows = max(0, int(context.viewport.height))
-        if len(lines_out) <= max_rows:
-            return lines_out
-
-        anchor = getattr(resolved.region, "vertical_anchor", "top")
-        if anchor == "bottom":
-            return lines_out[-max_rows:]
-        return lines_out[:max_rows]
-
-    @staticmethod
-    def _line_region_start_row(region: object, height: int, line_count: int) -> int:
-        """Resolve local vertical anchoring for line-oriented region composition."""
-
-        if height <= 0 or line_count <= 0:
-            return 0
-
-        anchor = getattr(region, "vertical_anchor", "top")
-        if anchor == "bottom":
-            return max(0, height - line_count)
-        return 0
+        return clip_rendered_lines(
+            render_lines(context),
+            height=context.viewport.height,
+            vertical_anchor=getattr(resolved.region, "vertical_anchor", "top"),
+        )
 
     @staticmethod
     def _normalize_region_line(line: str, width: int) -> str:

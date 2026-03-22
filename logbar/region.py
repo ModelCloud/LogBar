@@ -35,6 +35,80 @@ class Region:
         raise NotImplementedError
 
 
+def _normalize_vertical_anchor(vertical_anchor: VerticalAnchor) -> VerticalAnchor:
+    """Validate and normalize one line-region anchoring policy."""
+
+    if vertical_anchor not in {"top", "bottom"}:
+        raise ValueError("vertical_anchor must be either 'top' or 'bottom'.")
+    return vertical_anchor
+
+
+def clip_rendered_lines(
+    lines: Sequence[str],
+    *,
+    height: int,
+    vertical_anchor: VerticalAnchor = "top",
+) -> list[str]:
+    """Clip one rendered line list to the visible viewport height."""
+
+    max_rows = max(0, int(height))
+    if max_rows <= 0:
+        return []
+
+    rendered = [str(line) for line in lines]
+    if len(rendered) <= max_rows:
+        return rendered
+
+    normalized_anchor = _normalize_vertical_anchor(vertical_anchor)
+    if normalized_anchor == "bottom":
+        return rendered[-max_rows:]
+    return rendered[:max_rows]
+
+
+def line_region_start_row(
+    *,
+    height: int,
+    line_count: int,
+    vertical_anchor: VerticalAnchor = "top",
+) -> int:
+    """Resolve the first visible row for one vertically anchored line list."""
+
+    if height <= 0 or line_count <= 0:
+        return 0
+
+    normalized_anchor = _normalize_vertical_anchor(vertical_anchor)
+    if normalized_anchor == "bottom":
+        return max(0, int(height) - int(line_count))
+    return 0
+
+
+def render_line_buffer(
+    lines: Sequence[str],
+    context: RenderContext,
+    *,
+    vertical_anchor: VerticalAnchor = "top",
+) -> CellBuffer:
+    """Render one line list into a viewport-sized local cell buffer."""
+
+    buffer = CellBuffer(context.viewport.width, context.viewport.height)
+    if buffer.height <= 0 or buffer.width <= 0:
+        return buffer
+
+    visible_lines = clip_rendered_lines(
+        lines,
+        height=buffer.height,
+        vertical_anchor=vertical_anchor,
+    )
+    start_row = line_region_start_row(
+        height=buffer.height,
+        line_count=len(visible_lines),
+        vertical_anchor=vertical_anchor,
+    )
+    for row_offset, line in enumerate(visible_lines):
+        buffer.draw_text(0, start_row + row_offset, str(line)[:buffer.width])
+    return buffer
+
+
 class LineRegion(Region):
     """Simple line-oriented region used for the transitional ANSI backend path."""
 
@@ -47,9 +121,7 @@ class LineRegion(Region):
         """Store plain lines that will be clipped into the target viewport."""
 
         self._lines = [str(line) for line in (lines or ())]
-        if vertical_anchor not in {"top", "bottom"}:
-            raise ValueError("vertical_anchor must be either 'top' or 'bottom'.")
-        self._vertical_anchor: VerticalAnchor = vertical_anchor
+        self._vertical_anchor = _normalize_vertical_anchor(vertical_anchor)
 
     @property
     def lines(self) -> list[str]:
@@ -72,29 +144,20 @@ class LineRegion(Region):
     def render_lines(self, context: RenderContext) -> list[str]:
         """Return the visible subset of stored lines for one viewport."""
 
-        if context.viewport.height <= 0:
-            return []
-        if self._vertical_anchor == "bottom":
-            return self._lines[-context.viewport.height:]
-        return self._lines[:context.viewport.height]
+        return clip_rendered_lines(
+            self._lines,
+            height=context.viewport.height,
+            vertical_anchor=self._vertical_anchor,
+        )
 
     def render(self, context: RenderContext) -> CellBuffer:
         """Render the stored lines into a viewport-sized local cell buffer."""
 
-        buffer = CellBuffer(context.viewport.width, context.viewport.height)
-        if buffer.height <= 0 or buffer.width <= 0 or not self._lines:
-            return buffer
-
-        visible_lines = self.render_lines(context)
-        if self._vertical_anchor == "bottom":
-            start_row = max(0, buffer.height - len(visible_lines))
-        else:
-            start_row = 0
-
-        for row_offset, line in enumerate(visible_lines):
-            buffer.draw_text(0, start_row + row_offset, line[:buffer.width])
-
-        return buffer
+        return render_line_buffer(
+            self._lines,
+            context,
+            vertical_anchor=self._vertical_anchor,
+        )
 
 
 class TextRegion(LineRegion):
@@ -203,13 +266,21 @@ class LogRegion(Region):
     def render(self, context: RenderContext) -> CellBuffer:
         """Render the pane content into a viewport-sized local cell buffer."""
 
-        buffer = CellBuffer(context.viewport.width, context.viewport.height)
-        if buffer.height <= 0 or buffer.width <= 0:
-            return buffer
-
-        for row_idx, line in enumerate(self.render_lines(context)[:buffer.height]):
-            buffer.draw_text(0, row_idx, line[:buffer.width])
-        return buffer
+        return render_line_buffer(
+            self.render_lines(context),
+            context,
+            vertical_anchor=self.vertical_anchor,
+        )
 
 
-__all__ = ["LineRegion", "LogRegion", "Region", "RenderContext", "TextRegion", "VerticalAnchor"]
+__all__ = [
+    "LineRegion",
+    "LogRegion",
+    "Region",
+    "RenderContext",
+    "TextRegion",
+    "VerticalAnchor",
+    "clip_rendered_lines",
+    "line_region_start_row",
+    "render_line_buffer",
+]
