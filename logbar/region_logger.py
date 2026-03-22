@@ -23,6 +23,7 @@ class RegionLogBar(LogBar):
         *,
         supports_ansi: bool = True,
         on_change: Optional[Callable[["RegionLogBar"], None]] = None,
+        footer_delegate: Optional[object] = None,
     ) -> None:
         """Bind the logger to one pane region instead of the process stdout."""
 
@@ -30,6 +31,7 @@ class RegionLogBar(LogBar):
         self._region = region if region is not None else LogRegion()
         self._supports_ansi = bool(supports_ansi)
         self._on_change = on_change
+        self._footer_delegate = footer_delegate
 
     @property
     def region(self) -> LogRegion:
@@ -49,6 +51,36 @@ class RegionLogBar(LogBar):
         self._on_change = callback
         return self
 
+    def set_footer_delegate(self, delegate: Optional[object]) -> "RegionLogBar":
+        """Install or remove the object that owns pane footer mutations."""
+
+        self._footer_delegate = delegate
+        return self
+
+    def _set_footer_lines(self, lines: Sequence[str]) -> None:
+        """Apply footer replacement through a delegate when one is installed."""
+
+        if callable(getattr(self._footer_delegate, "set_footer_lines", None)):
+            self._footer_delegate.set_footer_lines(lines)
+            return
+        self._region.set_footer_lines(lines)
+
+    def _append_footer_line(self, line: str) -> None:
+        """Append one footer row through a delegate when one is installed."""
+
+        if callable(getattr(self._footer_delegate, "append_footer_line", None)):
+            self._footer_delegate.append_footer_line(line)
+            return
+        self._region.append_footer_line(line)
+
+    def _clear_footer(self) -> None:
+        """Clear footer rows through a delegate when one is installed."""
+
+        if callable(getattr(self._footer_delegate, "clear_footer", None)):
+            self._footer_delegate.clear_footer()
+            return
+        self._region.clear_footer()
+
     def bind_region(self, region: LogRegion) -> "RegionLogBar":
         """Rebind the logger to a different LogRegion."""
 
@@ -61,21 +93,21 @@ class RegionLogBar(LogBar):
     def set_footer_lines(self, lines: Sequence[str]) -> "RegionLogBar":
         """Replace the region footer rows."""
 
-        self._region.set_footer_lines(lines)
+        self._set_footer_lines(lines)
         self._notify_change()
         return self
 
     def append_footer_line(self, line: str) -> "RegionLogBar":
         """Append one footer row to the bound region."""
 
-        self._region.append_footer_line(line)
+        self._append_footer_line(line)
         self._notify_change()
         return self
 
     def clear_footer(self) -> "RegionLogBar":
         """Remove all footer content from the bound region."""
 
-        self._region.clear_footer()
+        self._clear_footer()
         self._notify_change()
         return self
 
@@ -90,7 +122,7 @@ class RegionLogBar(LogBar):
         """Reset both body and footer content for the bound region."""
 
         self._region.clear_body()
-        self._region.clear_footer()
+        self._clear_footer()
         self._notify_change()
         return self
 

@@ -7,7 +7,15 @@
 
 from .logbar import LogBar
 from .region_logger import RegionLogBar
+from .region_progress import RegionProgressBar, RegionRollingProgressBar
 from .screen import RegionScreen
 from .session import RegionScreenSession
 
-__all__ = ["LogBar", "RegionLogBar", "RegionScreen", "RegionScreenSession"]
+__all__ = [
+    "LogBar",
+    "RegionLogBar",
+    "RegionProgressBar",
+    "RegionRollingProgressBar",
+    "RegionScreen",
+    "RegionScreenSession",
+]

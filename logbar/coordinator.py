@@ -178,6 +178,7 @@ class RenderCoordinator:
         name: Optional[str] = None,
         supports_ansi: bool = True,
         on_change: Optional[Callable[[object], None]] = None,
+        footer_delegate: Optional[object] = None,
     ) -> "RegionLogBar":
         """Return a region-bound logger backed by one registered LogRegion."""
 
@@ -199,6 +200,7 @@ class RenderCoordinator:
             region=region,
             supports_ansi=supports_ansi,
             on_change=on_change,
+            footer_delegate=footer_delegate,
         )
 
     def resolve_registered_regions(
