@@ -9,7 +9,7 @@ import unittest
 
 from logbar.coordinator import RenderCoordinator
 from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport
-from logbar.region import RenderContext, TextRegion
+from logbar.region import LineRegion, RenderContext, TextRegion
 
 
 class TestRegion(unittest.TestCase):
@@ -37,6 +37,20 @@ class TestRegion(unittest.TestCase):
             "    ",
             "tail",
         ])
+
+    def test_line_region_render_lines_clips_bottom_without_blank_padding(self):
+        """Line regions should expose only visible anchored rows for ANSI-style backends."""
+
+        region = LineRegion(["one", "two", "three"], vertical_anchor="bottom")
+
+        visible = region.render_lines(
+            RenderContext(
+                viewport=Viewport(0, 0, 10, 2),
+                root_viewport=Viewport(0, 0, 10, 2),
+            )
+        )
+
+        self.assertEqual(visible, ["two", "three"])
 
     def test_coordinator_composes_registered_regions_into_one_frame(self):
         """Coordinator composition should blit leaf region buffers into root space."""

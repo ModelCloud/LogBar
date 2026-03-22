@@ -18,6 +18,7 @@ from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
 from .coordinator import RenderCoordinator
 from .drawing import ansi_to_html, strip_ansi, visible_length
+from .region import LineRegion
 
 # global static/shared logger instance
 logger = None
@@ -259,6 +260,8 @@ def _coordinator_state():
 _DEFAULT_RENDER_COORDINATOR = RenderCoordinator(
     on_state_change=lambda _name, _value: _sync_default_coordinator_state()
 )
+_ROOT_STACK_REGION = LineRegion(vertical_anchor="bottom")
+_DEFAULT_RENDER_COORDINATOR.register_region(_DEFAULT_RENDER_COORDINATOR.root_region_id, _ROOT_STACK_REGION)
 _sync_default_coordinator_state()
 _REFRESH_INTERVAL_SECONDS = 0.1
 
@@ -655,6 +658,13 @@ def _render_progress_stack_locked(
             for pb in to_remove:
                 _DEFAULT_RENDER_COORDINATOR.detach_progress_bar(pb)
 
+    _ROOT_STACK_REGION.set_lines(lines)
+    lines = _DEFAULT_RENDER_COORDINATOR.compose_root_lines(
+        columns=columns,
+        lines=rows,
+        style_enabled=state.supports_styling,
+    )
+
     supports_cursor = state.supports_cursor
 
     if not supports_cursor:
@@ -676,8 +686,6 @@ def _render_progress_stack_locked(
 
     terminal_columns = max(0, int(columns))
     terminal_rows = max(0, int(rows))
-    if terminal_rows > 0 and len(lines) > terminal_rows:
-        lines = lines[-terminal_rows:]
 
     previous_count = coordinator_state._last_drawn_progress_count
     previous_lines = list(coordinator_state._last_rendered_progress_lines)

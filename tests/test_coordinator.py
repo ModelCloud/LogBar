@@ -9,6 +9,7 @@ import unittest
 
 from logbar.coordinator import DEFAULT_ROOT_REGION_ID, RenderCoordinator
 from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport
+from logbar.region import LineRegion
 
 
 class TestRenderCoordinator(unittest.TestCase):
@@ -116,3 +117,13 @@ class TestRenderCoordinator(unittest.TestCase):
         resolved = coordinator.resolve_viewports(columns=7, lines=2)
 
         self.assertEqual(resolved, {"main": Viewport(0, 0, 7, 2)})
+
+    def test_compose_root_lines_uses_registered_root_line_region(self):
+        """The transitional root-line composer should honor viewport clipping."""
+
+        coordinator = RenderCoordinator()
+        coordinator.register_region(DEFAULT_ROOT_REGION_ID, LineRegion(["one", "two", "three"], vertical_anchor="bottom"))
+
+        visible = coordinator.compose_root_lines(columns=6, lines=2)
+
+        self.assertEqual(visible, ["two", "three"])

@@ -35,8 +35,8 @@ class Region:
         raise NotImplementedError
 
 
-class TextRegion(Region):
-    """Simple plain-text region used for early coordinator composition tests."""
+class LineRegion(Region):
+    """Simple line-oriented region used for the transitional ANSI backend path."""
 
     def __init__(
         self,
@@ -63,11 +63,20 @@ class TextRegion(Region):
 
         return self._vertical_anchor
 
-    def set_lines(self, lines: Sequence[str]) -> "TextRegion":
+    def set_lines(self, lines: Sequence[str]) -> "LineRegion":
         """Replace the stored lines and return the region for chaining."""
 
         self._lines = [str(line) for line in lines]
         return self
+
+    def render_lines(self, context: RenderContext) -> list[str]:
+        """Return the visible subset of stored lines for one viewport."""
+
+        if context.viewport.height <= 0:
+            return []
+        if self._vertical_anchor == "bottom":
+            return self._lines[-context.viewport.height:]
+        return self._lines[:context.viewport.height]
 
     def render(self, context: RenderContext) -> CellBuffer:
         """Render the stored lines into a viewport-sized local cell buffer."""
@@ -76,7 +85,7 @@ class TextRegion(Region):
         if buffer.height <= 0 or buffer.width <= 0 or not self._lines:
             return buffer
 
-        visible_lines = self._lines[-buffer.height:] if self._vertical_anchor == "bottom" else self._lines[:buffer.height]
+        visible_lines = self.render_lines(context)
         if self._vertical_anchor == "bottom":
             start_row = max(0, buffer.height - len(visible_lines))
         else:
@@ -88,4 +97,8 @@ class TextRegion(Region):
         return buffer
 
 
-__all__ = ["Region", "RenderContext", "TextRegion", "VerticalAnchor"]
+class TextRegion(LineRegion):
+    """Compatibility alias for plain-text regions backed by line rendering."""
+
+
+__all__ = ["LineRegion", "Region", "RenderContext", "TextRegion", "VerticalAnchor"]

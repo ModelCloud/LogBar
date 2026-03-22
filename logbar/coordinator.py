@@ -226,6 +226,40 @@ class RenderCoordinator:
 
         return frame
 
+    def compose_root_lines(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+        style_enabled: bool = True,
+    ) -> list[str]:
+        """Resolve and render the default root region as visible terminal rows."""
+
+        root_viewport = viewport
+        if root_viewport is None:
+            if columns is None or lines is None:
+                raise ValueError("columns and lines are required when viewport is not provided.")
+            root_viewport = self.root_viewport(columns=columns, lines=lines)
+
+        resolved = self.resolve_registered_regions(viewport=root_viewport)
+        if len(resolved) != 1 or resolved[0].viewport != root_viewport:
+            raise ValueError("compose_root_lines requires a single region that occupies the root viewport.")
+
+        region = resolved[0].region
+        render_lines = getattr(region, "render_lines", None)
+        if not callable(render_lines):
+            raise TypeError(f"Registered root region {resolved[0].region_id!r} does not provide render_lines(context).")
+
+        lines_out = render_lines(
+            RenderContext(
+                viewport=root_viewport,
+                root_viewport=root_viewport,
+                style_enabled=style_enabled,
+            )
+        )
+        return [str(line) for line in lines_out]
+
     def attach_progress_bar(self, pb: object) -> None:
         """Register one progress renderable with the coordinator."""
 
