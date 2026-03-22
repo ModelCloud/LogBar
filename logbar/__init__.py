@@ -6,6 +6,7 @@
 """Top-level package for the LogBar utility."""
 
 from .logbar import LogBar
+from .layout import columns, pane, rows
 from .region_logger import RegionLogBar
 from .region_progress import RegionProgressBar, RegionRollingProgressBar
 from .screen import RegionScreen
@@ -21,4 +22,7 @@ __all__ = [
     "RegionScreen",
     "RegionScreenBackend",
     "RegionScreenSession",
+    "columns",
+    "pane",
+    "rows",
 ]

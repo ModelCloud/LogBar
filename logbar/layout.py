@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,28 @@ class LeafNode(LayoutNode):
         """Resolve a leaf directly to the provided viewport."""
 
         return [LayoutAssignment(region_id=self.region_id, viewport=viewport)]
+
+
+LayoutChild = Union[str, LayoutNode]
+
+
+def pane(region_id: str) -> LeafNode:
+    """Create one leaf layout node from a public region identifier."""
+
+    normalized = str(region_id).strip()
+    if not normalized:
+        raise ValueError("region_id must not be empty.")
+    return LeafNode(normalized)
+
+
+def _coerce_layout_child(child: LayoutChild) -> LayoutNode:
+    """Normalize bare region ids and existing layout nodes into one node."""
+
+    if isinstance(child, LayoutNode):
+        return child
+    if isinstance(child, str):
+        return pane(child)
+    raise TypeError("layout children must be region-id strings or LayoutNode instances.")
 
 
 def _normalize_weights(children: Sequence[LayoutNode], weights: Optional[Sequence[int]]) -> List[int]:
@@ -212,12 +234,46 @@ def resolve_layout(root: LayoutNode, viewport: Viewport) -> Dict[str, Viewport]:
     return resolved
 
 
+def columns(
+    *children: LayoutChild,
+    weights: Optional[Sequence[int]] = None,
+    gutter: int = 0,
+) -> SplitNode:
+    """Create a left-to-right split from region ids or nested layout nodes."""
+
+    return SplitNode(
+        direction=SplitDirection.LEFT_RIGHT,
+        children=tuple(_coerce_layout_child(child) for child in children),
+        weights=weights,
+        gutter=gutter,
+    )
+
+
+def rows(
+    *children: LayoutChild,
+    weights: Optional[Sequence[int]] = None,
+    gutter: int = 0,
+) -> SplitNode:
+    """Create a top-to-bottom split from region ids or nested layout nodes."""
+
+    return SplitNode(
+        direction=SplitDirection.TOP_BOTTOM,
+        children=tuple(_coerce_layout_child(child) for child in children),
+        weights=weights,
+        gutter=gutter,
+    )
+
+
 __all__ = [
     "LayoutAssignment",
+    "LayoutChild",
     "LayoutNode",
     "LeafNode",
     "SplitDirection",
     "SplitNode",
     "Viewport",
+    "columns",
+    "pane",
+    "rows",
     "resolve_layout",
 ]

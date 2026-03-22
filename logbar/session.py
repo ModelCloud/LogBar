@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple
 
 from .coordinator import RenderCoordinator
-from .layout import LayoutNode
+from .layout import LeafNode, LayoutNode, SplitNode, columns as layout_columns, rows as layout_rows
 from .logbar import _RENDER_LOCK
 from .region import LogRegion
 from .region_logger import RegionLogBar
@@ -57,6 +57,42 @@ class _SessionFooterDelegate:
 class RegionScreenSession:
     """Bind a coordinator, screen backend, and region loggers into one session."""
 
+    @classmethod
+    def from_layout(cls, layout_root: LayoutNode, **kwargs) -> "RegionScreenSession":
+        """Create one session from a prebuilt public layout tree."""
+
+        return cls(layout_root=layout_root, **kwargs)
+
+    @classmethod
+    def columns(
+        cls,
+        *children,
+        weights=None,
+        gutter: int = 0,
+        **kwargs,
+    ) -> "RegionScreenSession":
+        """Create one session whose root layout is a left-to-right split."""
+
+        return cls(
+            layout_root=layout_columns(*children, weights=weights, gutter=gutter),
+            **kwargs,
+        )
+
+    @classmethod
+    def rows(
+        cls,
+        *children,
+        weights=None,
+        gutter: int = 0,
+        **kwargs,
+    ) -> "RegionScreenSession":
+        """Create one session whose root layout is a top-to-bottom split."""
+
+        return cls(
+            layout_root=layout_rows(*children, weights=weights, gutter=gutter),
+            **kwargs,
+        )
+
     def __init__(
         self,
         *,
@@ -92,6 +128,7 @@ class RegionScreenSession:
         self._refresh_thread: Optional[threading.Thread] = None
         self._refresh_thread_lock = threading.Lock()
         self._refresh_stop_event = threading.Event()
+        self._register_layout_regions(self._coordinator.layout_root)
 
     @property
     def coordinator(self) -> RenderCoordinator:
@@ -121,6 +158,7 @@ class RegionScreenSession:
         """Replace the active layout tree and optionally repaint."""
 
         layout = self._coordinator.set_layout(layout_root)
+        self._register_layout_regions(layout)
         if self._auto_render:
             self.render()
         return layout
@@ -288,6 +326,24 @@ class RegionScreenSession:
 
         normalized = str(region_id or self._coordinator.root_region_id).strip()
         return normalized or self._coordinator.root_region_id
+
+    def _register_layout_regions(self, layout_root: LayoutNode) -> None:
+        """Ensure every layout leaf has a backing pane region registered."""
+
+        for region_id in self._layout_region_ids(layout_root):
+            self._ensure_pane_state(region_id)
+
+    def _layout_region_ids(self, node: LayoutNode) -> list[str]:
+        """Collect all region ids from one public layout tree."""
+
+        if isinstance(node, LeafNode):
+            return [node.region_id]
+        if isinstance(node, SplitNode):
+            region_ids: list[str] = []
+            for child in node.children:
+                region_ids.extend(self._layout_region_ids(child))
+            return region_ids
+        raise TypeError(f"Unsupported layout node type: {type(node)!r}")
 
     def _ensure_pane_state(self, region_id: Optional[str]) -> _SessionPaneState:
         """Create or return the pane state for one region identifier."""

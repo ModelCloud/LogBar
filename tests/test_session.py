@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest import mock
 
-from logbar.layout import LeafNode, SplitDirection, SplitNode
+from logbar.layout import LeafNode, SplitDirection, SplitNode, rows
 from logbar.session import RegionScreenSession
 
 
@@ -171,3 +171,35 @@ class TestRegionScreenSession(unittest.TestCase):
 
             spinner.close()
             session.close()
+
+    def test_session_columns_helper_builds_nested_public_layouts(self):
+        """Public session helpers should create split sessions without raw layout nodes."""
+
+        stream = _FakeTTY()
+        session = RegionScreenSession.columns(
+            "left",
+            rows("right_top", "right_bottom"),
+            weights=(2, 3),
+            stream=stream,
+            size_provider=lambda: (30, 4),
+            use_alternate_screen=False,
+            auto_render=False,
+        )
+
+        left_logger = session.create_logger("left", supports_ansi=False)
+        right_bottom_logger = session.create_logger("right_bottom", supports_ansi=False)
+        left_logger.setLevel("INFO")
+        right_bottom_logger.setLevel("INFO")
+        left_logger.info("L")
+        right_bottom_logger.info("RB")
+
+        rows_out = session.render()
+
+        self.assertEqual(rows_out, [
+            "                              ",
+            "                              ",
+            "                              ",
+            "INFO  L     INFO  RB          ",
+        ])
+
+        session.close()

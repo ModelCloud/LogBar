@@ -7,7 +7,7 @@
 
 import unittest
 
-from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport, resolve_layout
+from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport, columns, pane, resolve_layout, rows
 
 
 class TestLayout(unittest.TestCase):
@@ -87,3 +87,24 @@ class TestLayout(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             resolve_layout(layout, Viewport(0, 0, 10, 2))
+
+    def test_public_layout_helpers_build_nested_split_trees(self):
+        """Public helpers should coerce strings into the expected nested layout tree."""
+
+        layout = columns(
+            "left",
+            rows("right_top", pane("right_bottom")),
+            weights=(2, 3),
+        )
+
+        resolved = resolve_layout(layout, Viewport(0, 0, 50, 15))
+
+        self.assertEqual(resolved["left"], Viewport(0, 0, 20, 15))
+        self.assertEqual(resolved["right_top"], Viewport(20, 0, 30, 8))
+        self.assertEqual(resolved["right_bottom"], Viewport(20, 8, 30, 7))
+
+    def test_public_layout_helpers_reject_unknown_child_types(self):
+        """Public helpers should fail fast on unsupported child values."""
+
+        with self.assertRaises(TypeError):
+            columns("left", 7)  # type: ignore[arg-type]
