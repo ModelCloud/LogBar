@@ -47,6 +47,27 @@ class RowSegment:
     text: str
 
 
+@dataclass(frozen=True)
+class PositionedRegion:
+    """Carry one resolved region with its render context and root-local offset."""
+
+    resolved: ResolvedRegion
+    context: RenderContext
+    local_x: int
+    local_y: int
+
+
+@dataclass(frozen=True)
+class ClippedDivider:
+    """Describe one root-clipped divider rectangle in root-local coordinates."""
+
+    local_x: int
+    local_y: int
+    width: int
+    height: int
+    fill: str
+
+
 class RenderCoordinatorState:
     """Mutable state container for one render coordinator instance."""
 
@@ -235,21 +256,23 @@ class RenderCoordinator:
             resolved_layout.root_viewport.width,
             resolved_layout.root_viewport.height,
         )
-        for resolved, context in self._iter_render_contexts(resolved_layout, style_enabled=style_enabled):
-            render = getattr(resolved.region, "render", None)
+        for positioned in self._iter_positioned_regions(resolved_layout, style_enabled=style_enabled):
+            render = getattr(positioned.resolved.region, "render", None)
             if not callable(render):
-                raise TypeError(f"Registered region {resolved.region_id!r} does not provide render(context).")
+                raise TypeError(
+                    f"Registered region {positioned.resolved.region_id!r} does not provide render(context)."
+                )
 
-            region_buffer = render(context)
+            region_buffer = render(positioned.context)
             if not isinstance(region_buffer, CellBuffer):
                 raise TypeError(
-                    f"Region {resolved.region_id!r} returned {type(region_buffer)!r}; expected CellBuffer."
+                    f"Region {positioned.resolved.region_id!r} returned {type(region_buffer)!r}; expected CellBuffer."
                 )
 
             frame.blit(
                 region_buffer,
-                dest_x=resolved.viewport.x - resolved_layout.root_viewport.x,
-                dest_y=resolved.viewport.y - resolved_layout.root_viewport.y,
+                dest_x=positioned.local_x,
+                dest_y=positioned.local_y,
             )
 
         self._draw_layout_dividers_into_frame(frame, resolved_layout)
@@ -275,8 +298,8 @@ class RenderCoordinator:
                 f"Registered root region {resolved_region.region_id!r} does not provide render_lines(context)."
             )
 
-        _, context = next(self._iter_render_contexts(resolved_layout, style_enabled=style_enabled))
-        lines_out = render_lines(context)
+        positioned = next(self._iter_positioned_regions(resolved_layout, style_enabled=style_enabled))
+        lines_out = render_lines(positioned.context)
         return [str(line) for line in lines_out]
 
     def compose_layout_lines(
@@ -295,26 +318,25 @@ class RenderCoordinator:
             return []
 
         row_segments: list[list[RowSegment]] = [[] for _ in range(root_viewport.height)]
-        for resolved, local_context in self._iter_render_contexts(resolved_layout, style_enabled=style_enabled):
-            local_lines = self._render_region_lines(resolved, local_context)
+        for positioned in self._iter_positioned_regions(resolved_layout, style_enabled=style_enabled):
+            local_lines = self._render_region_lines(positioned.resolved, positioned.context)
             if not local_lines:
                 continue
 
             start_y = line_region_start_row(
-                height=resolved.viewport.height,
+                height=positioned.resolved.viewport.height,
                 line_count=len(local_lines),
-                vertical_anchor=getattr(resolved.region, "vertical_anchor", "top"),
+                vertical_anchor=getattr(positioned.resolved.region, "vertical_anchor", "top"),
             )
-            absolute_x = resolved.viewport.x - root_viewport.x
             for offset, line in enumerate(local_lines):
-                absolute_y = (resolved.viewport.y - root_viewport.y) + start_y + offset
+                absolute_y = positioned.local_y + start_y + offset
                 if absolute_y < 0 or absolute_y >= root_viewport.height:
                     continue
                 row_segments[absolute_y].append(
                     RowSegment(
-                        x=absolute_x,
-                        width=resolved.viewport.width,
-                        text=self._normalize_region_line(line, resolved.viewport.width),
+                        x=positioned.local_x,
+                        width=positioned.resolved.viewport.width,
+                        text=self._normalize_region_line(line, positioned.resolved.viewport.width),
                     )
                 )
 
@@ -346,8 +368,8 @@ class RenderCoordinator:
     ) -> ResolvedCoordinatorLayout:
         """Resolve one layout tree and bind every leaf to a registered region."""
 
+        resolved_layout = self._resolve_layout(columns=columns, lines=lines, viewport=viewport)
         root_viewport = self._resolve_root_viewport(columns=columns, lines=lines, viewport=viewport)
-        resolved_layout = self._layout_root.resolve(root_viewport)
         resolved_regions: list[ResolvedRegion] = []
         for region_id, region_viewport in resolved_layout.viewports.items():
             if region_id not in self._regions:
@@ -395,18 +417,23 @@ class RenderCoordinator:
         return self.root_viewport(columns=columns, lines=lines)
 
     @staticmethod
-    def _iter_render_contexts(
+    def _iter_positioned_regions(
         resolved_layout: ResolvedCoordinatorLayout,
         *,
         style_enabled: bool,
-    ) -> Iterator[tuple[ResolvedRegion, RenderContext]]:
-        """Yield registered regions with the render context for one pass."""
+    ) -> Iterator[PositionedRegion]:
+        """Yield registered regions with their render context and root-local offset."""
 
         for resolved in resolved_layout.regions:
-            yield resolved, RenderContext(
-                viewport=resolved.viewport,
-                root_viewport=resolved_layout.root_viewport,
-                style_enabled=style_enabled,
+            yield PositionedRegion(
+                resolved=resolved,
+                context=RenderContext(
+                    viewport=resolved.viewport,
+                    root_viewport=resolved_layout.root_viewport,
+                    style_enabled=style_enabled,
+                ),
+                local_x=resolved.viewport.x - resolved_layout.root_viewport.x,
+                local_y=resolved.viewport.y - resolved_layout.root_viewport.y,
             )
 
     def attach_progress_bar(self, pb: object) -> None:
@@ -514,41 +541,37 @@ class RenderCoordinator:
     ) -> None:
         """Append all layout divider rectangles to the row segment grid."""
 
-        for divider in resolved_layout.layout.dividers:
-            self._append_divider_segments(
-                row_segments,
-                divider.viewport,
-                divider.fill,
-                root_viewport=resolved_layout.root_viewport,
-            )
+        for divider in self._iter_clipped_dividers(resolved_layout):
+            text = divider.fill * divider.width
+            for row_offset in range(divider.height):
+                absolute_y = divider.local_y + row_offset
+                if absolute_y < 0 or absolute_y >= len(row_segments):
+                    continue
+                row_segments[absolute_y].append(
+                    RowSegment(
+                        x=divider.local_x,
+                        width=divider.width,
+                        text=text,
+                    )
+                )
 
     @staticmethod
-    def _append_divider_segments(
-        row_segments: list[list[RowSegment]],
-        divider_viewport: Viewport,
-        fill: str,
-        *,
-        root_viewport: Viewport,
-    ) -> None:
-        """Append one divider rectangle as row segments inside the composed root frame."""
+    def _iter_clipped_dividers(
+        resolved_layout: ResolvedCoordinatorLayout,
+    ) -> Iterator[ClippedDivider]:
+        """Yield all visible layout divider rectangles in root-local coordinates."""
 
-        clipped = divider_viewport.intersection(root_viewport)
-        if clipped.width <= 0 or clipped.height <= 0 or not fill:
-            return
-
-        text = fill[:1] * clipped.width
-        absolute_x = clipped.x - root_viewport.x
-        start_y = clipped.y - root_viewport.y
-        for row_offset in range(clipped.height):
-            absolute_y = start_y + row_offset
-            if absolute_y < 0 or absolute_y >= len(row_segments):
+        root_viewport = resolved_layout.root_viewport
+        for divider in resolved_layout.layout.dividers:
+            clipped = divider.viewport.intersection(root_viewport)
+            if clipped.width <= 0 or clipped.height <= 0 or not divider.fill:
                 continue
-            row_segments[absolute_y].append(
-                RowSegment(
-                    x=absolute_x,
-                    width=clipped.width,
-                    text=text,
-                )
+            yield ClippedDivider(
+                local_x=clipped.x - root_viewport.x,
+                local_y=clipped.y - root_viewport.y,
+                width=clipped.width,
+                height=clipped.height,
+                fill=divider.fill[:1],
             )
 
     def _draw_layout_dividers_into_frame(
@@ -558,33 +581,10 @@ class RenderCoordinator:
     ) -> None:
         """Fill all resolved layout dividers into one composed cell frame."""
 
-        for divider in resolved_layout.layout.dividers:
-            self._draw_divider_into_frame(
-                frame,
-                divider.viewport,
-                divider.fill,
-                root_viewport=resolved_layout.root_viewport,
-            )
-
-    @staticmethod
-    def _draw_divider_into_frame(
-        frame: CellBuffer,
-        divider_viewport: Viewport,
-        fill: str,
-        *,
-        root_viewport: Viewport,
-    ) -> None:
-        """Fill one divider rectangle into the composed cell frame."""
-
-        clipped = divider_viewport.intersection(root_viewport)
-        if clipped.width <= 0 or clipped.height <= 0 or not fill:
-            return
-
-        local_x = clipped.x - root_viewport.x
-        local_y = clipped.y - root_viewport.y
-        text = fill[:1] * clipped.width
-        for row_offset in range(clipped.height):
-            frame.draw_text(local_x, local_y + row_offset, text)
+        for divider in self._iter_clipped_dividers(resolved_layout):
+            text = divider.fill * divider.width
+            for row_offset in range(divider.height):
+                frame.draw_text(divider.local_x, divider.local_y + row_offset, text)
 
 
 __all__ = [
