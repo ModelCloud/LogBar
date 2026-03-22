@@ -8,11 +8,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Sequence
+from typing import Callable, Dict, Iterator, Optional, Sequence
 
 from .drawing import ANSI_RESET, strip_ansi, truncate_ansi, visible_length
 from .frame import CellBuffer
-from .layout import LeafNode, LayoutNode, Viewport, resolve_dividers as resolve_layout_dividers, resolve_layout as resolve_region_layout
+from .layout import DividerAssignment, LeafNode, LayoutNode, ResolvedLayout, Viewport
 from .region import RenderContext
 
 
@@ -27,6 +27,15 @@ class ResolvedRegion:
     region_id: str
     region: object
     viewport: Viewport
+
+
+@dataclass(frozen=True)
+class ResolvedCoordinatorLayout:
+    """Bind one resolved layout tree to registered region objects."""
+
+    root_viewport: Viewport
+    layout: ResolvedLayout
+    regions: list[ResolvedRegion]
 
 
 @dataclass(frozen=True)
@@ -137,12 +146,7 @@ class RenderCoordinator:
     ) -> Dict[str, Viewport]:
         """Resolve the active layout tree into concrete leaf rectangles."""
 
-        if viewport is None:
-            if columns is None or lines is None:
-                raise ValueError("columns and lines are required when viewport is not provided.")
-            viewport = self.root_viewport(columns=columns, lines=lines)
-
-        return resolve_region_layout(self._layout_root, viewport)
+        return dict(self._resolve_layout(columns=columns, lines=lines, viewport=viewport).viewports)
 
     def register_region(self, region_id: str, region: object) -> object:
         """Associate one region object with a layout leaf identifier."""
@@ -212,19 +216,9 @@ class RenderCoordinator:
     ) -> list[ResolvedRegion]:
         """Resolve the layout tree and bind each leaf to a registered region object."""
 
-        viewports = self.resolve_viewports(columns=columns, lines=lines, viewport=viewport)
-        resolved: list[ResolvedRegion] = []
-        for region_id, region_viewport in viewports.items():
-            if region_id not in self._regions:
-                raise KeyError(f"Layout references unregistered region id: {region_id!r}")
-            resolved.append(
-                ResolvedRegion(
-                    region_id=region_id,
-                    region=self._regions[region_id],
-                    viewport=region_viewport,
-                )
-            )
-        return resolved
+        return list(
+            self._resolve_registered_layout(columns=columns, lines=lines, viewport=viewport).regions
+        )
 
     def compose_frame(
         self,
@@ -236,25 +230,17 @@ class RenderCoordinator:
     ) -> CellBuffer:
         """Render all registered layout leaves into one composed root frame."""
 
-        root_viewport = viewport
-        if root_viewport is None:
-            if columns is None or lines is None:
-                raise ValueError("columns and lines are required when viewport is not provided.")
-            root_viewport = self.root_viewport(columns=columns, lines=lines)
-
-        frame = CellBuffer(root_viewport.width, root_viewport.height)
-        for resolved in self.resolve_registered_regions(viewport=root_viewport):
+        resolved_layout = self._resolve_registered_layout(columns=columns, lines=lines, viewport=viewport)
+        frame = CellBuffer(
+            resolved_layout.root_viewport.width,
+            resolved_layout.root_viewport.height,
+        )
+        for resolved, context in self._iter_render_contexts(resolved_layout, style_enabled=style_enabled):
             render = getattr(resolved.region, "render", None)
             if not callable(render):
                 raise TypeError(f"Registered region {resolved.region_id!r} does not provide render(context).")
 
-            region_buffer = render(
-                RenderContext(
-                    viewport=resolved.viewport,
-                    root_viewport=root_viewport,
-                    style_enabled=style_enabled,
-                )
-            )
+            region_buffer = render(context)
             if not isinstance(region_buffer, CellBuffer):
                 raise TypeError(
                     f"Region {resolved.region_id!r} returned {type(region_buffer)!r}; expected CellBuffer."
@@ -262,12 +248,11 @@ class RenderCoordinator:
 
             frame.blit(
                 region_buffer,
-                dest_x=resolved.viewport.x - root_viewport.x,
-                dest_y=resolved.viewport.y - root_viewport.y,
+                dest_x=resolved.viewport.x - resolved_layout.root_viewport.x,
+                dest_y=resolved.viewport.y - resolved_layout.root_viewport.y,
             )
 
-        for divider in resolve_layout_dividers(self._layout_root, root_viewport):
-            self._draw_divider_into_frame(frame, divider.viewport, divider.fill, root_viewport=root_viewport)
+        self._draw_layout_dividers_into_frame(frame, resolved_layout)
 
         return frame
 
@@ -315,22 +300,13 @@ class RenderCoordinator:
     ) -> list[str]:
         """Compose all registered leaf regions into full-width root terminal rows."""
 
-        root_viewport = viewport
-        if root_viewport is None:
-            if columns is None or lines is None:
-                raise ValueError("columns and lines are required when viewport is not provided.")
-            root_viewport = self.root_viewport(columns=columns, lines=lines)
-
+        resolved_layout = self._resolve_registered_layout(columns=columns, lines=lines, viewport=viewport)
+        root_viewport = resolved_layout.root_viewport
         if root_viewport.height <= 0:
             return []
 
         row_segments: list[list[RowSegment]] = [[] for _ in range(root_viewport.height)]
-        for resolved in self.resolve_registered_regions(viewport=root_viewport):
-            local_context = RenderContext(
-                viewport=resolved.viewport,
-                root_viewport=root_viewport,
-                style_enabled=style_enabled,
-            )
+        for resolved, local_context in self._iter_render_contexts(resolved_layout, style_enabled=style_enabled):
             local_lines = self._render_region_lines(resolved, local_context)
             if not local_lines:
                 continue
@@ -349,18 +325,82 @@ class RenderCoordinator:
                     )
                 )
 
-        for divider in resolve_layout_dividers(self._layout_root, root_viewport):
-            self._append_divider_segments(
-                row_segments,
-                divider.viewport,
-                divider.fill,
-                root_viewport=root_viewport,
-            )
+        self._append_layout_divider_segments(row_segments, resolved_layout)
 
         return [
             self._compose_row_from_segments(segments, root_viewport.width)
             for segments in row_segments
         ]
+
+    def _resolve_layout(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+    ) -> ResolvedLayout:
+        """Resolve the active layout tree once for a root viewport."""
+
+        root_viewport = self._resolve_root_viewport(columns=columns, lines=lines, viewport=viewport)
+        return self._layout_root.resolve(root_viewport)
+
+    def _resolve_registered_layout(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+    ) -> ResolvedCoordinatorLayout:
+        """Resolve one layout tree and bind every leaf to a registered region."""
+
+        root_viewport = self._resolve_root_viewport(columns=columns, lines=lines, viewport=viewport)
+        resolved_layout = self._layout_root.resolve(root_viewport)
+        resolved_regions: list[ResolvedRegion] = []
+        for region_id, region_viewport in resolved_layout.viewports.items():
+            if region_id not in self._regions:
+                raise KeyError(f"Layout references unregistered region id: {region_id!r}")
+            resolved_regions.append(
+                ResolvedRegion(
+                    region_id=region_id,
+                    region=self._regions[region_id],
+                    viewport=region_viewport,
+                )
+            )
+        return ResolvedCoordinatorLayout(
+            root_viewport=root_viewport,
+            layout=resolved_layout,
+            regions=resolved_regions,
+        )
+
+    def _resolve_root_viewport(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+    ) -> Viewport:
+        """Normalize caller-provided dimensions into one root viewport."""
+
+        if viewport is not None:
+            return viewport
+        if columns is None or lines is None:
+            raise ValueError("columns and lines are required when viewport is not provided.")
+        return self.root_viewport(columns=columns, lines=lines)
+
+    @staticmethod
+    def _iter_render_contexts(
+        resolved_layout: ResolvedCoordinatorLayout,
+        *,
+        style_enabled: bool,
+    ) -> Iterator[tuple[ResolvedRegion, RenderContext]]:
+        """Yield registered regions with the render context for one pass."""
+
+        for resolved in resolved_layout.regions:
+            yield resolved, RenderContext(
+                viewport=resolved.viewport,
+                root_viewport=resolved_layout.root_viewport,
+                style_enabled=style_enabled,
+            )
 
     def attach_progress_bar(self, pb: object) -> None:
         """Register one progress renderable with the coordinator."""
@@ -476,6 +516,21 @@ class RenderCoordinator:
 
         return "".join(parts)
 
+    def _append_layout_divider_segments(
+        self,
+        row_segments: list[list[RowSegment]],
+        resolved_layout: ResolvedCoordinatorLayout,
+    ) -> None:
+        """Append all layout divider rectangles to the row segment grid."""
+
+        for divider in resolved_layout.layout.dividers:
+            self._append_divider_segments(
+                row_segments,
+                divider.viewport,
+                divider.fill,
+                root_viewport=resolved_layout.root_viewport,
+            )
+
     @staticmethod
     def _append_divider_segments(
         row_segments: list[list[RowSegment]],
@@ -503,6 +558,21 @@ class RenderCoordinator:
                     width=clipped.width,
                     text=text,
                 )
+            )
+
+    def _draw_layout_dividers_into_frame(
+        self,
+        frame: CellBuffer,
+        resolved_layout: ResolvedCoordinatorLayout,
+    ) -> None:
+        """Fill all resolved layout dividers into one composed cell frame."""
+
+        for divider in resolved_layout.layout.dividers:
+            self._draw_divider_into_frame(
+                frame,
+                divider.viewport,
+                divider.fill,
+                root_viewport=resolved_layout.root_viewport,
             )
 
     @staticmethod

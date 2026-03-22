@@ -238,9 +238,8 @@ class RegionScreenSession:
         """Advance time-based pane progress bars once and repaint the session."""
 
         with _RENDER_LOCK:
-            state = self._screen.backend_state()
+            state, size_changed = self._resolve_backend_state()
             now = time.monotonic()
-            size_changed = self._last_render_size != (state.columns, state.lines)
             changed = size_changed or force
 
             for pane in self._pane_states.values():
@@ -263,8 +262,7 @@ class RegionScreenSession:
         """Render the current layout frame through the bound screen backend."""
 
         with _RENDER_LOCK:
-            state = backend_state or self._screen.backend_state()
-            size_changed = self._last_render_size != (state.columns, state.lines)
+            state, size_changed = self._resolve_backend_state(backend_state)
             self._sync_all_pane_footers(
                 backend_state=state,
                 force=force_progress_refresh or size_changed,
@@ -365,26 +363,42 @@ class RegionScreenSession:
 
         return pane
 
+    def _mutate_pane(self, region_id: str, mutate) -> _SessionPaneState:
+        """Apply one mutation to pane-owned state and return the pane object."""
+
+        pane = self._ensure_pane_state(region_id)
+        mutate(pane)
+        return pane
+
+    def _mutate_static_footer(self, region_id: str, mutate) -> None:
+        """Mutate the pane-owned static footer layer and resync rendered footer rows."""
+
+        self._mutate_pane(region_id, mutate)
+        self._sync_pane_footer(region_id)
+
     def _set_static_footer_lines(self, region_id: str, lines) -> None:
         """Replace the pane-owned static footer layer and resync the region."""
 
-        pane = self._ensure_pane_state(region_id)
-        pane.static_footer_lines = [str(line) for line in lines]
-        self._sync_pane_footer(region_id)
+        self._mutate_static_footer(
+            region_id,
+            lambda pane: setattr(pane, "static_footer_lines", [str(line) for line in lines]),
+        )
 
     def _append_static_footer_line(self, region_id: str, line: str) -> None:
         """Append one line to the pane-owned static footer layer."""
 
-        pane = self._ensure_pane_state(region_id)
-        pane.static_footer_lines.append(str(line))
-        self._sync_pane_footer(region_id)
+        self._mutate_static_footer(
+            region_id,
+            lambda pane: pane.static_footer_lines.append(str(line)),
+        )
 
     def _clear_static_footer(self, region_id: str) -> None:
         """Clear the pane-owned static footer layer."""
 
-        pane = self._ensure_pane_state(region_id)
-        pane.static_footer_lines = []
-        self._sync_pane_footer(region_id)
+        self._mutate_static_footer(
+            region_id,
+            lambda pane: setattr(pane, "static_footer_lines", []),
+        )
 
     def _progress_width(self, region_id: str, backend_state) -> int:
         """Resolve the current viewport width for one pane's progress footer."""
@@ -502,30 +516,36 @@ class RegionScreenSession:
             except Exception:
                 continue
 
-    def _attach_progress_bar(self, region_id: str, pb: object) -> None:
-        """Register one pane-local progress bar in the target region."""
+    def _update_progress_registration(self, region_id: str, pb: object, *, attached: bool) -> None:
+        """Attach or detach one pane-local progress bar and trigger follow-up rendering."""
 
         pane = self._ensure_pane_state(region_id)
-        if pb not in pane.progress_bars:
-            pane.progress_bars.append(pb)
-        self._dirty_progress_bars.add(pb)
+        if attached:
+            if pb not in pane.progress_bars:
+                pane.progress_bars.append(pb)
+            self._dirty_progress_bars.add(pb)
+        else:
+            if pb in pane.progress_bars:
+                pane.progress_bars.remove(pb)
+            self._dirty_progress_bars.discard(pb)
+
         self._sync_pane_footer(region_id, force=True, allow_repeat=True)
         if self._auto_render:
             self.render(force_progress_refresh=True)
-        self.start_background_refresh()
+        if attached:
+            self.start_background_refresh()
+        elif not self._has_active_progress_bars():
+            self.stop_background_refresh()
+
+    def _attach_progress_bar(self, region_id: str, pb: object) -> None:
+        """Register one pane-local progress bar in the target region."""
+
+        self._update_progress_registration(region_id, pb, attached=True)
 
     def _detach_progress_bar(self, region_id: str, pb: object) -> None:
         """Remove one pane-local progress bar and restore the footer layer."""
 
-        pane = self._ensure_pane_state(region_id)
-        if pb in pane.progress_bars:
-            pane.progress_bars.remove(pb)
-        self._dirty_progress_bars.discard(pb)
-        self._sync_pane_footer(region_id, force=True, allow_repeat=True)
-        if self._auto_render:
-            self.render(force_progress_refresh=True)
-        if not self._has_active_progress_bars():
-            self.stop_background_refresh()
+        self._update_progress_registration(region_id, pb, attached=False)
 
     def _mark_progress_bar_dirty(self, region_id: str, pb: object) -> None:
         """React to one attached pane-local progress bar becoming dirty."""
@@ -538,8 +558,7 @@ class RegionScreenSession:
     def _draw_progress_bar(self, region_id: str, pb: object, *, force: bool = False) -> None:
         """Resolve one pane-local progress bar and optionally repaint the screen."""
 
-        state = self._screen.backend_state()
-        size_changed = self._last_render_size != (state.columns, state.lines)
+        state, size_changed = self._resolve_backend_state()
         width = self._progress_width(region_id, state)
         rendered = pb._resolve_rendered_line(
             width,
@@ -563,6 +582,13 @@ class RegionScreenSession:
         self._dirty_progress_bars.discard(pb)
         if self._auto_render:
             self.render(backend_state=state, force_progress_refresh=size_changed)
+
+    def _resolve_backend_state(self, backend_state=None):
+        """Return the current backend snapshot plus whether the terminal size changed."""
+
+        state = backend_state or self._screen.backend_state()
+        size_changed = self._last_render_size != (state.columns, state.lines)
+        return state, size_changed
 
     def __enter__(self) -> "RegionScreenSession":
         """Allow callers to manage the session lifetime with a context manager."""
