@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from typing import Optional, TYPE_CHECKING
 
+from .logbar import _RENDER_LOCK
 from .progress import ProgressBar, RollingProgressBar
 
 if TYPE_CHECKING:  # pragma: no cover - type hints without runtime import cycle
@@ -34,8 +35,9 @@ class _SessionBoundProgressMixin:
     def _mark_dirty(self):
         """Mark the pane-local bar dirty and optionally refresh the session."""
 
-        if self._attached:
-            self._session._mark_progress_bar_dirty(self._region_id, self)
+        with _RENDER_LOCK:
+            if self._attached:
+                self._session._mark_progress_bar_dirty(self._region_id, self)
         return self
 
     @property
@@ -49,35 +51,38 @@ class _SessionBoundProgressMixin:
 
         del logger
 
-        if self.closed or self._attached:
-            return self
+        with _RENDER_LOCK:
+            if self.closed or self._attached:
+                return self
 
-        self._attached = True
-        self._attached_logger = None
-        self._owner_logger = None
-        self._next_title_refresh_at = 0.0
-        self._on_session_attach()
-        self._session._attach_progress_bar(self._region_id, self)
+            self._attached = True
+            self._attached_logger = None
+            self._owner_logger = None
+            self._next_title_refresh_at = 0.0
+            self._on_session_attach()
+            self._session._attach_progress_bar(self._region_id, self)
         return self
 
     def detach(self):
         """Detach the pane-bound renderable from its session footer."""
 
-        if not self._attached:
-            return self
+        with _RENDER_LOCK:
+            if not self._attached:
+                return self
 
-        self._on_session_detach()
-        self._session._detach_progress_bar(self._region_id, self)
-        self._attached = False
-        self._attached_logger = None
-        self._last_rendered_line = ""
-        self._next_title_refresh_at = 0.0
+            self._on_session_detach()
+            self._session._detach_progress_bar(self._region_id, self)
+            self._attached = False
+            self._attached_logger = None
+            self._last_rendered_line = ""
+            self._next_title_refresh_at = 0.0
         return self
 
     def draw(self, force: bool = False):
         """Resolve and optionally paint the pane-local progress footer."""
 
-        self._session._draw_progress_bar(self._region_id, self, force=force)
+        with _RENDER_LOCK:
+            self._session._draw_progress_bar(self._region_id, self, force=force)
 
 
 class RegionProgressBar(_SessionBoundProgressMixin, ProgressBar):

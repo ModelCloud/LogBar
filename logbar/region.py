@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import threading
 from typing import Literal, Optional, Sequence
 
 from .frame import CellBuffer
@@ -122,42 +123,48 @@ class LineRegion(Region):
 
         self._lines = [str(line) for line in (lines or ())]
         self._vertical_anchor = _normalize_vertical_anchor(vertical_anchor)
+        self._lock = threading.RLock()
 
     @property
     def lines(self) -> list[str]:
         """Return a defensive copy of the stored plain-text lines."""
 
-        return list(self._lines)
+        with self._lock:
+            return list(self._lines)
 
     @property
     def vertical_anchor(self) -> VerticalAnchor:
         """Return the configured vertical anchoring policy."""
 
-        return self._vertical_anchor
+        with self._lock:
+            return self._vertical_anchor
 
     def set_lines(self, lines: Sequence[str]) -> "LineRegion":
         """Replace the stored lines and return the region for chaining."""
 
-        self._lines = [str(line) for line in lines]
+        with self._lock:
+            self._lines = [str(line) for line in lines]
         return self
 
     def render_lines(self, context: RenderContext) -> list[str]:
         """Return the visible subset of stored lines for one viewport."""
 
-        return clip_rendered_lines(
-            self._lines,
-            height=context.viewport.height,
-            vertical_anchor=self._vertical_anchor,
-        )
+        with self._lock:
+            return clip_rendered_lines(
+                self._lines,
+                height=context.viewport.height,
+                vertical_anchor=self._vertical_anchor,
+            )
 
     def render(self, context: RenderContext) -> CellBuffer:
         """Render the stored lines into a viewport-sized local cell buffer."""
 
-        return render_line_buffer(
-            self._lines,
-            context,
-            vertical_anchor=self._vertical_anchor,
-        )
+        with self._lock:
+            return render_line_buffer(
+                self._lines,
+                context,
+                vertical_anchor=self._vertical_anchor,
+            )
 
 
 class TextRegion(LineRegion):
@@ -179,98 +186,111 @@ class LogRegion(Region):
 
         self._body_lines = [str(line) for line in (body_lines or ())]
         self._footer_lines = [str(line) for line in (footer_lines or ())]
+        self._lock = threading.RLock()
 
     @property
     def body_lines(self) -> list[str]:
         """Return a defensive copy of the current body scrollback."""
 
-        return list(self._body_lines)
+        with self._lock:
+            return list(self._body_lines)
 
     @property
     def footer_lines(self) -> list[str]:
         """Return a defensive copy of the current footer rows."""
 
-        return list(self._footer_lines)
+        with self._lock:
+            return list(self._footer_lines)
 
     def set_body_lines(self, lines: Sequence[str]) -> "LogRegion":
         """Replace the visible body scrollback source."""
 
-        self._body_lines = [str(line) for line in lines]
+        with self._lock:
+            self._body_lines = [str(line) for line in lines]
         return self
 
     def append_body_line(self, line: str) -> "LogRegion":
         """Append one new body line to the region scrollback."""
 
-        self._body_lines.append(str(line))
+        with self._lock:
+            self._body_lines.append(str(line))
         return self
 
     def extend_body_lines(self, lines: Sequence[str]) -> "LogRegion":
         """Append multiple body lines in order."""
 
-        self._body_lines.extend(str(line) for line in lines)
+        with self._lock:
+            self._body_lines.extend(str(line) for line in lines)
         return self
 
     def clear_body(self) -> "LogRegion":
         """Remove all body content from the region."""
 
-        self._body_lines = []
+        with self._lock:
+            self._body_lines = []
         return self
 
     def set_footer_lines(self, lines: Sequence[str]) -> "LogRegion":
         """Replace the anchored footer rows."""
 
-        self._footer_lines = [str(line) for line in lines]
+        with self._lock:
+            self._footer_lines = [str(line) for line in lines]
         return self
 
     def append_footer_line(self, line: str) -> "LogRegion":
         """Append one footer row at the bottom of the region."""
 
-        self._footer_lines.append(str(line))
+        with self._lock:
+            self._footer_lines.append(str(line))
         return self
 
     def extend_footer_lines(self, lines: Sequence[str]) -> "LogRegion":
         """Append multiple footer rows in order."""
 
-        self._footer_lines.extend(str(line) for line in lines)
+        with self._lock:
+            self._footer_lines.extend(str(line) for line in lines)
         return self
 
     def clear_footer(self) -> "LogRegion":
         """Remove all footer content from the region."""
 
-        self._footer_lines = []
+        with self._lock:
+            self._footer_lines = []
         return self
 
     def render_lines(self, context: RenderContext) -> list[str]:
         """Render body scrollback above anchored footer rows inside the viewport."""
 
-        height = max(0, int(context.viewport.height))
-        if height <= 0:
-            return []
+        with self._lock:
+            height = max(0, int(context.viewport.height))
+            if height <= 0:
+                return []
 
-        footer_visible = self._footer_lines[-height:]
-        footer_count = min(len(footer_visible), height)
-        body_height = max(0, height - footer_count)
-        body_visible = self._body_lines[-body_height:] if body_height > 0 else []
+            footer_visible = self._footer_lines[-height:]
+            footer_count = min(len(footer_visible), height)
+            body_height = max(0, height - footer_count)
+            body_visible = self._body_lines[-body_height:] if body_height > 0 else []
 
-        rows = [""] * height
-        body_start = max(0, body_height - len(body_visible))
-        for idx, line in enumerate(body_visible):
-            rows[body_start + idx] = line
+            rows = [""] * height
+            body_start = max(0, body_height - len(body_visible))
+            for idx, line in enumerate(body_visible):
+                rows[body_start + idx] = line
 
-        footer_start = height - footer_count
-        for idx, line in enumerate(footer_visible):
-            rows[footer_start + idx] = line
+            footer_start = height - footer_count
+            for idx, line in enumerate(footer_visible):
+                rows[footer_start + idx] = line
 
-        return rows
+            return rows
 
     def render(self, context: RenderContext) -> CellBuffer:
         """Render the pane content into a viewport-sized local cell buffer."""
 
-        return render_line_buffer(
-            self.render_lines(context),
-            context,
-            vertical_anchor=self.vertical_anchor,
-        )
+        with self._lock:
+            return render_line_buffer(
+                self.render_lines(context),
+                context,
+                vertical_anchor=self.vertical_anchor,
+            )
 
 
 __all__ = [

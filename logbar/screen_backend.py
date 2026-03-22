@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from typing import Callable, Optional, Protocol, Sequence, Tuple
 
 from .buffer import get_buffered_stdout
@@ -52,14 +53,16 @@ class AnsiRegionScreenBackend:
         self._cursor_hidden = False
         self._last_rendered_lines: list[str] = []
         self._last_rendered_size: Optional[tuple[int, int]] = None
+        self._lock = threading.RLock()
 
     def backend_state(self) -> RenderBackendState:
         """Probe the current capabilities and geometry of the bound stream."""
 
-        return render_backend_state(
-            stream=self._stream,
-            size_provider=self._size_provider,
-        )
+        with self._lock:
+            return render_backend_state(
+                stream=self._stream,
+                size_provider=self._size_provider,
+            )
 
     def render_lines(
         self,
@@ -69,71 +72,73 @@ class AnsiRegionScreenBackend:
     ) -> None:
         """Paint one frame of composed lines onto the ANSI terminal backend."""
 
-        state = backend_state or self.backend_state()
-        normalized_lines = [str(line) for line in lines]
+        with self._lock:
+            state = backend_state or self.backend_state()
+            normalized_lines = [str(line) for line in lines]
 
-        if not state.supports_cursor:
-            payload = "\n".join(normalized_lines)
-            if payload:
-                self._write(payload)
-                self._write("\n")
+            if not state.supports_cursor:
+                payload = "\n".join(normalized_lines)
+                if payload:
+                    self._write(payload)
+                    self._write("\n")
+                    self._flush()
+                self._last_rendered_lines = list(normalized_lines)
+                self._last_rendered_size = (state.columns, state.lines)
+                return
+
+            sequences: list[str] = []
+            size_changed = self._last_rendered_size != (state.columns, state.lines)
+
+            if self._use_alternate_screen and not self._entered_alternate_screen:
+                sequences.append("\033[?1049h")
+                self._entered_alternate_screen = True
+                size_changed = True
+
+            if not self._cursor_hidden:
+                sequences.append("\033[?25l")
+                self._cursor_hidden = True
+
+            if size_changed or len(self._last_rendered_lines) != len(normalized_lines):
+                sequences.append("\033[2J")
+                row_indexes = list(range(len(normalized_lines)))
+            else:
+                row_indexes = [
+                    index
+                    for index, (old_line, new_line) in enumerate(zip(self._last_rendered_lines, normalized_lines))
+                    if old_line != new_line
+                ]
+
+            for row_index in row_indexes:
+                sequences.append(f"\033[{row_index + 1};1H")
+                sequences.append("\033[2K")
+                sequences.append(normalized_lines[row_index])
+
+            if normalized_lines:
+                sequences.append("\033[1;1H")
+
+            if sequences:
+                self._write("".join(sequences))
                 self._flush()
+
             self._last_rendered_lines = list(normalized_lines)
             self._last_rendered_size = (state.columns, state.lines)
-            return
-
-        sequences: list[str] = []
-        size_changed = self._last_rendered_size != (state.columns, state.lines)
-
-        if self._use_alternate_screen and not self._entered_alternate_screen:
-            sequences.append("\033[?1049h")
-            self._entered_alternate_screen = True
-            size_changed = True
-
-        if not self._cursor_hidden:
-            sequences.append("\033[?25l")
-            self._cursor_hidden = True
-
-        if size_changed or len(self._last_rendered_lines) != len(normalized_lines):
-            sequences.append("\033[2J")
-            row_indexes = list(range(len(normalized_lines)))
-        else:
-            row_indexes = [
-                index
-                for index, (old_line, new_line) in enumerate(zip(self._last_rendered_lines, normalized_lines))
-                if old_line != new_line
-            ]
-
-        for row_index in row_indexes:
-            sequences.append(f"\033[{row_index + 1};1H")
-            sequences.append("\033[2K")
-            sequences.append(normalized_lines[row_index])
-
-        if normalized_lines:
-            sequences.append("\033[1;1H")
-
-        if sequences:
-            self._write("".join(sequences))
-            self._flush()
-
-        self._last_rendered_lines = list(normalized_lines)
-        self._last_rendered_size = (state.columns, state.lines)
 
     def close(self) -> None:
         """Restore terminal state and forget the last rendered frame."""
 
-        sequences: list[str] = []
-        if self._cursor_hidden:
-            sequences.append("\033[?25h")
-            self._cursor_hidden = False
-        if self._entered_alternate_screen:
-            sequences.append("\033[?1049l")
-            self._entered_alternate_screen = False
-        if sequences:
-            self._write("".join(sequences))
-            self._flush()
-        self._last_rendered_lines = []
-        self._last_rendered_size = None
+        with self._lock:
+            sequences: list[str] = []
+            if self._cursor_hidden:
+                sequences.append("\033[?25h")
+                self._cursor_hidden = False
+            if self._entered_alternate_screen:
+                sequences.append("\033[?1049l")
+                self._entered_alternate_screen = False
+            if sequences:
+                self._write("".join(sequences))
+                self._flush()
+            self._last_rendered_lines = []
+            self._last_rendered_size = None
 
     def _write(self, data: str) -> int:
         """Write one raw payload to the bound output stream."""

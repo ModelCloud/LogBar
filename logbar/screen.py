@@ -52,20 +52,22 @@ class RegionScreen:
     def backend_state(self) -> RenderBackendState:
         """Probe the current capabilities and geometry of the bound backend."""
 
-        return self._backend.backend_state()
+        with _RENDER_LOCK:
+            return self._backend.backend_state()
 
     def compose_lines(self, *, backend_state: Optional[RenderBackendState] = None) -> list[str]:
         """Resolve the coordinator into fully composed terminal rows."""
 
-        state = backend_state or self.backend_state()
-        rows = self._coordinator.compose_layout_lines(
-            columns=state.columns,
-            lines=state.lines,
-            style_enabled=state.supports_styling,
-        )
-        if state.supports_ansi:
-            return rows
-        return [strip_ansi(row) for row in rows]
+        with _RENDER_LOCK:
+            state = backend_state or self.backend_state()
+            rows = self._coordinator.compose_layout_lines(
+                columns=state.columns,
+                lines=state.lines,
+                style_enabled=state.supports_styling,
+            )
+            if state.supports_ansi:
+                return rows
+            return [strip_ansi(row) for row in rows]
 
     def render(self, *, backend_state: Optional[RenderBackendState] = None) -> list[str]:
         """Compose and paint the current layout frame onto the target stream."""

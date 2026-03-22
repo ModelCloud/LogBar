@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
+import threading
 from typing import Callable, Dict, Iterator, Optional, Sequence
 
 from .drawing import ANSI_RESET, strip_ansi, truncate_ansi, visible_length
@@ -18,6 +20,17 @@ from .region import RenderContext, clip_rendered_lines, line_region_start_row
 
 StateChangeCallback = Callable[[str, object], None]
 DEFAULT_ROOT_REGION_ID = "root"
+
+
+def _coordinator_locked(method):
+    """Serialize one coordinator API call through its instance lock."""
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 @dataclass(frozen=True)
@@ -133,6 +146,7 @@ class RenderCoordinator:
         self._root_region_id = normalized_root
         self._layout_root: LayoutNode = LeafNode(normalized_root)
         self._regions: Dict[str, object] = {}
+        self._lock = threading.RLock()
         self.state = RenderCoordinatorState(on_change=on_state_change)
 
     @property
@@ -152,12 +166,14 @@ class RenderCoordinator:
 
         return Viewport(0, 0, max(0, int(columns)), max(0, int(lines)))
 
+    @_coordinator_locked
     def set_layout(self, layout_root: Optional[LayoutNode] = None) -> LayoutNode:
         """Install a layout tree or restore the default single-root leaf."""
 
         self._layout_root = layout_root if layout_root is not None else LeafNode(self._root_region_id)
         return self._layout_root
 
+    @_coordinator_locked
     def resolve_viewports(
         self,
         *,
@@ -169,6 +185,7 @@ class RenderCoordinator:
 
         return dict(self._resolve_layout(columns=columns, lines=lines, viewport=viewport).viewports)
 
+    @_coordinator_locked
     def register_region(self, region_id: str, region: object) -> object:
         """Associate one region object with a layout leaf identifier."""
 
@@ -178,6 +195,7 @@ class RenderCoordinator:
         self._regions[normalized] = region
         return region
 
+    @_coordinator_locked
     def unregister_region(self, region_id: str) -> Optional[object]:
         """Remove one previously registered region object."""
 
@@ -186,16 +204,19 @@ class RenderCoordinator:
             return None
         return self._regions.pop(normalized, None)
 
+    @_coordinator_locked
     def region(self, region_id: str) -> Optional[object]:
         """Return the registered object for one region identifier."""
 
         return self._regions.get(str(region_id).strip())
 
+    @_coordinator_locked
     def registered_regions(self) -> Dict[str, object]:
         """Return a defensive copy of the region registry."""
 
         return dict(self._regions)
 
+    @_coordinator_locked
     def create_region_logger(
         self,
         region_id: str,
@@ -228,6 +249,7 @@ class RenderCoordinator:
             footer_delegate=footer_delegate,
         )
 
+    @_coordinator_locked
     def resolve_registered_regions(
         self,
         *,
@@ -241,6 +263,7 @@ class RenderCoordinator:
             self._resolve_registered_layout(columns=columns, lines=lines, viewport=viewport).regions
         )
 
+    @_coordinator_locked
     def compose_frame(
         self,
         *,
@@ -268,6 +291,7 @@ class RenderCoordinator:
 
         return frame
 
+    @_coordinator_locked
     def compose_root_lines(
         self,
         *,
@@ -282,6 +306,7 @@ class RenderCoordinator:
         positioned = next(self._iter_positioned_regions(resolved_layout, style_enabled=style_enabled))
         return self._render_region_lines(positioned.resolved, positioned.context)
 
+    @_coordinator_locked
     def compose_layout_lines(
         self,
         *,
@@ -436,6 +461,7 @@ class RenderCoordinator:
                 local_y=resolved.viewport.y - resolved_layout.root_viewport.y,
             )
 
+    @_coordinator_locked
     def attach_progress_bar(self, pb: object) -> None:
         """Register one progress renderable with the coordinator."""
 
@@ -443,6 +469,7 @@ class RenderCoordinator:
             self.state._attached_progress_bars.append(pb)
         self.state._dirty_progress_bars.add(pb)
 
+    @_coordinator_locked
     def detach_progress_bar(self, pb: object) -> None:
         """Remove one progress renderable from the coordinator."""
 
@@ -450,12 +477,14 @@ class RenderCoordinator:
             self.state._attached_progress_bars.remove(pb)
         self.state._dirty_progress_bars.discard(pb)
 
+    @_coordinator_locked
     def mark_progress_bar_dirty(self, pb: object) -> None:
         """Flag one attached renderable for a future redraw."""
 
         if pb in self.state._attached_progress_bars:
             self.state._dirty_progress_bars.add(pb)
 
+    @_coordinator_locked
     def active_progress_bars(self) -> list[object]:
         """Return a stable snapshot of the attached progress renderables."""
 
