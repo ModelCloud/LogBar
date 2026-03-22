@@ -8,6 +8,7 @@
 import unittest
 
 from logbar.coordinator import DEFAULT_ROOT_REGION_ID, RenderCoordinator
+from logbar.drawing import strip_ansi
 from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport
 from logbar.region import LineRegion
 
@@ -127,3 +128,78 @@ class TestRenderCoordinator(unittest.TestCase):
         visible = coordinator.compose_root_lines(columns=6, lines=2)
 
         self.assertEqual(visible, ["two", "three"])
+
+    def test_compose_layout_lines_places_side_by_side_regions(self):
+        """The line compositor should assemble adjacent horizontal regions into one row."""
+
+        coordinator = RenderCoordinator()
+        coordinator.set_layout(
+            SplitNode(
+                direction=SplitDirection.LEFT_RIGHT,
+                children=(
+                    LeafNode("left"),
+                    LeafNode("right"),
+                ),
+            )
+        )
+        coordinator.register_region("left", LineRegion(["L1", "L2"]))
+        coordinator.register_region("right", LineRegion(["R1"], vertical_anchor="bottom"))
+
+        rows = coordinator.compose_layout_lines(columns=8, lines=2)
+
+        self.assertEqual(rows, [
+            "L1      ",
+            "L2  R1  ",
+        ])
+
+    def test_compose_layout_lines_supports_nested_split_trees(self):
+        """The line compositor should honor nested left/right and top/bottom regions."""
+
+        coordinator = RenderCoordinator()
+        coordinator.set_layout(
+            SplitNode(
+                direction=SplitDirection.LEFT_RIGHT,
+                children=(
+                    LeafNode("left"),
+                    SplitNode(
+                        direction=SplitDirection.TOP_BOTTOM,
+                        children=(
+                            LeafNode("right_top"),
+                            LeafNode("right_bottom"),
+                        ),
+                    ),
+                ),
+            )
+        )
+        coordinator.register_region("left", LineRegion(["L1", "L2", "L3"]))
+        coordinator.register_region("right_top", LineRegion(["T1"]))
+        coordinator.register_region("right_bottom", LineRegion(["B1", "B2"], vertical_anchor="bottom"))
+
+        rows = coordinator.compose_layout_lines(columns=8, lines=4)
+
+        self.assertEqual(rows, [
+            "L1  T1  ",
+            "L2      ",
+            "L3  B1  ",
+            "    B2  ",
+        ])
+
+    def test_compose_layout_lines_uses_visible_width_for_ansi_segments(self):
+        """ANSI escape sequences should not distort horizontal region placement."""
+
+        coordinator = RenderCoordinator()
+        coordinator.set_layout(
+            SplitNode(
+                direction=SplitDirection.LEFT_RIGHT,
+                children=(
+                    LeafNode("left"),
+                    LeafNode("right"),
+                ),
+            )
+        )
+        coordinator.register_region("left", LineRegion(["\033[31mA\033[0m"]))
+        coordinator.register_region("right", LineRegion(["B"]))
+
+        rows = coordinator.compose_layout_lines(columns=6, lines=1)
+
+        self.assertEqual(strip_ansi(rows[0]), "A  B  ")

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Sequence
 
+from .drawing import ANSI_RESET, truncate_ansi, visible_length
 from .frame import CellBuffer
 from .layout import LeafNode, LayoutNode, Viewport, resolve_layout as resolve_region_layout
 from .region import RenderContext
@@ -26,6 +27,15 @@ class ResolvedRegion:
     region_id: str
     region: object
     viewport: Viewport
+
+
+@dataclass(frozen=True)
+class RowSegment:
+    """Describe one already-clipped line segment placed on a root row."""
+
+    x: int
+    width: int
+    text: str
 
 
 class RenderCoordinatorState:
@@ -260,6 +270,55 @@ class RenderCoordinator:
         )
         return [str(line) for line in lines_out]
 
+    def compose_layout_lines(
+        self,
+        *,
+        columns: Optional[int] = None,
+        lines: Optional[int] = None,
+        viewport: Optional[Viewport] = None,
+        style_enabled: bool = True,
+    ) -> list[str]:
+        """Compose all registered leaf regions into full-width root terminal rows."""
+
+        root_viewport = viewport
+        if root_viewport is None:
+            if columns is None or lines is None:
+                raise ValueError("columns and lines are required when viewport is not provided.")
+            root_viewport = self.root_viewport(columns=columns, lines=lines)
+
+        if root_viewport.height <= 0:
+            return []
+
+        row_segments: list[list[RowSegment]] = [[] for _ in range(root_viewport.height)]
+        for resolved in self.resolve_registered_regions(viewport=root_viewport):
+            local_context = RenderContext(
+                viewport=resolved.viewport,
+                root_viewport=root_viewport,
+                style_enabled=style_enabled,
+            )
+            local_lines = self._render_region_lines(resolved, local_context)
+            if not local_lines:
+                continue
+
+            start_y = self._line_region_start_row(resolved.region, resolved.viewport.height, len(local_lines))
+            absolute_x = resolved.viewport.x - root_viewport.x
+            for offset, line in enumerate(local_lines):
+                absolute_y = (resolved.viewport.y - root_viewport.y) + start_y + offset
+                if absolute_y < 0 or absolute_y >= root_viewport.height:
+                    continue
+                row_segments[absolute_y].append(
+                    RowSegment(
+                        x=absolute_x,
+                        width=resolved.viewport.width,
+                        text=self._normalize_region_line(line, resolved.viewport.width),
+                    )
+                )
+
+        return [
+            self._compose_row_from_segments(segments, root_viewport.width)
+            for segments in row_segments
+        ]
+
     def attach_progress_bar(self, pb: object) -> None:
         """Register one progress renderable with the coordinator."""
 
@@ -285,10 +344,89 @@ class RenderCoordinator:
 
         return list(self.state._attached_progress_bars)
 
+    def _render_region_lines(self, resolved: ResolvedRegion, context: RenderContext) -> list[str]:
+        """Ask one registered region for line output in the transitional line backend."""
+
+        render_lines = getattr(resolved.region, "render_lines", None)
+        if not callable(render_lines):
+            raise TypeError(
+                f"Registered region {resolved.region_id!r} does not provide render_lines(context)."
+            )
+
+        return [str(line) for line in render_lines(context)]
+
+    @staticmethod
+    def _line_region_start_row(region: object, height: int, line_count: int) -> int:
+        """Resolve local vertical anchoring for line-oriented region composition."""
+
+        if height <= 0 or line_count <= 0:
+            return 0
+
+        anchor = getattr(region, "vertical_anchor", "top")
+        if anchor == "bottom":
+            return max(0, height - line_count)
+        return 0
+
+    @staticmethod
+    def _normalize_region_line(line: str, width: int) -> str:
+        """Clip or pad one rendered region row to the assigned viewport width."""
+
+        width = max(0, int(width))
+        if width <= 0:
+            return ""
+
+        rendered = str(line)
+        current_width = visible_length(rendered)
+        if current_width > width:
+            return truncate_ansi(rendered, width)
+        if current_width < width:
+            pad = " " * (width - current_width)
+            if "\033[" in rendered and not rendered.endswith(ANSI_RESET):
+                return f"{rendered}{ANSI_RESET}{pad}"
+            return f"{rendered}{pad}"
+        return rendered
+
+    @staticmethod
+    def _compose_row_from_segments(segments: Sequence[RowSegment], total_width: int) -> str:
+        """Assemble one root terminal row from non-overlapping horizontal segments."""
+
+        if total_width <= 0:
+            return ""
+
+        if not segments:
+            return " " * total_width
+
+        cursor = 0
+        parts: list[str] = []
+        for segment in sorted(segments, key=lambda item: item.x):
+            if segment.x < cursor:
+                raise ValueError("Overlapping row segments cannot be composed deterministically.")
+            if segment.x > total_width:
+                continue
+
+            gap = segment.x - cursor
+            if gap > 0:
+                parts.append(" " * gap)
+                cursor += gap
+
+            remaining = max(0, total_width - cursor)
+            if remaining <= 0:
+                break
+
+            width = min(segment.width, remaining)
+            parts.append(RenderCoordinator._normalize_region_line(segment.text, width))
+            cursor += width
+
+        if cursor < total_width:
+            parts.append(" " * (total_width - cursor))
+
+        return "".join(parts)
+
 
 __all__ = [
     "DEFAULT_ROOT_REGION_ID",
     "RenderCoordinator",
     "RenderCoordinatorState",
     "ResolvedRegion",
+    "RowSegment",
 ]
