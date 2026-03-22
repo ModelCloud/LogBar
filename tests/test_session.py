@@ -48,7 +48,7 @@ class TestRegionScreenSession(unittest.TestCase):
         left_logger.info("a1")
 
         self.assertIn("\033[2J", stream.getvalue())
-        self.assertIn("\033[4;1H\033[2KINFO  a1            ", stream.getvalue())
+        self.assertIn("\033[4;1H\033[2KINFO  a1  |         ", stream.getvalue())
 
         stream.seek(0)
         stream.truncate(0)
@@ -56,7 +56,7 @@ class TestRegionScreenSession(unittest.TestCase):
         right_logger.set_footer_lines(["rb1"])
 
         self.assertEqual(stream.getvalue().count("\033[2K"), 1)
-        self.assertIn("\033[4;1H\033[2KINFO  a1  rb1       ", stream.getvalue())
+        self.assertIn("\033[4;1H\033[2KINFO  a1  |rb1      ", stream.getvalue())
 
         session.close()
 
@@ -196,10 +196,10 @@ class TestRegionScreenSession(unittest.TestCase):
         rows_out = session.render()
 
         self.assertEqual(rows_out, [
-            "                              ",
-            "                              ",
-            "                              ",
-            "INFO  L     INFO  RB          ",
+            "            |                 ",
+            "            |                 ",
+            "            |-----------------",
+            "INFO  L     |INFO  RB         ",
         ])
 
         session.close()

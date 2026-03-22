@@ -83,11 +83,30 @@ class LayoutAssignment:
     viewport: Viewport
 
 
+@dataclass(frozen=True)
+class DividerAssignment:
+    """Bind one split-divider rectangle to its repeated fill character."""
+
+    viewport: Viewport
+    fill: str
+
+    def __post_init__(self) -> None:
+        """Normalize the divider fill to a single visible character when present."""
+
+        text = str(self.fill or "")
+        object.__setattr__(self, "fill", text[:1])
+
+
 class LayoutNode:
     """Base class for nodes that can resolve into leaf viewports."""
 
     def assign(self, viewport: Viewport) -> List[LayoutAssignment]:
         """Return all leaf viewport assignments under this node."""
+
+        raise NotImplementedError
+
+    def dividers(self, viewport: Viewport) -> List[DividerAssignment]:
+        """Return all divider rectangles under this node."""
 
         raise NotImplementedError
 
@@ -102,6 +121,12 @@ class LeafNode(LayoutNode):
         """Resolve a leaf directly to the provided viewport."""
 
         return [LayoutAssignment(region_id=self.region_id, viewport=viewport)]
+
+    def dividers(self, viewport: Viewport) -> List[DividerAssignment]:
+        """Leaves do not introduce divider rectangles."""
+
+        del viewport
+        return []
 
 
 LayoutChild = Union[str, LayoutNode]
@@ -169,8 +194,10 @@ class SplitNode(LayoutNode):
     direction: SplitDirection
     children: Sequence[LayoutNode]
     weights: Optional[Sequence[int]] = None
-    gutter: int = 0
+    gutter: int = 1
+    divider: Optional[str] = None
     _resolved_weights: List[int] = field(init=False, repr=False)
+    _resolved_divider: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate split configuration eagerly so resolution stays simple."""
@@ -181,6 +208,10 @@ class SplitNode(LayoutNode):
             "_resolved_weights",
             _normalize_weights(self.children, self.weights),
         )
+        divider = self.divider
+        if divider is None:
+            divider = "|" if self.direction == SplitDirection.LEFT_RIGHT else "-"
+        object.__setattr__(self, "_resolved_divider", str(divider or "")[:1])
 
     def assign(self, viewport: Viewport) -> List[LayoutAssignment]:
         """Resolve all descendant leaves into absolute child rectangles."""
@@ -188,39 +219,74 @@ class SplitNode(LayoutNode):
         if len(self.children) == 1:
             return list(self.children[0].assign(viewport))
 
+        assignments: List[LayoutAssignment] = []
+        for child, child_viewport in self._child_viewports(viewport):
+            assignments.extend(child.assign(child_viewport))
+        return assignments
+
+    def dividers(self, viewport: Viewport) -> List[DividerAssignment]:
+        """Resolve all descendant split dividers into absolute rectangles."""
+
+        resolved: List[DividerAssignment] = []
+        child_viewports = self._child_viewports(viewport)
+        for index, (child, child_viewport) in enumerate(child_viewports):
+            resolved.extend(child.dividers(child_viewport))
+            if index >= len(child_viewports) - 1 or self.gutter <= 0 or not self._resolved_divider:
+                continue
+            if self.direction == SplitDirection.LEFT_RIGHT:
+                resolved.append(
+                    DividerAssignment(
+                        viewport=Viewport(child_viewport.right, viewport.y, self.gutter, viewport.height),
+                        fill=self._resolved_divider,
+                    )
+                )
+            elif self.direction == SplitDirection.TOP_BOTTOM:
+                resolved.append(
+                    DividerAssignment(
+                        viewport=Viewport(viewport.x, child_viewport.bottom, viewport.width, self.gutter),
+                        fill=self._resolved_divider,
+                    )
+                )
+            else:
+                raise ValueError(f"Unsupported split direction: {self.direction!r}")
+        return resolved
+
+    def _child_viewports(self, viewport: Viewport) -> List[tuple[LayoutNode, Viewport]]:
+        """Resolve direct child rectangles for one split node."""
+
         if self.direction == SplitDirection.LEFT_RIGHT:
-            return self._assign_left_right(viewport)
+            return self._left_right_child_viewports(viewport)
         if self.direction == SplitDirection.TOP_BOTTOM:
-            return self._assign_top_bottom(viewport)
+            return self._top_bottom_child_viewports(viewport)
         raise ValueError(f"Unsupported split direction: {self.direction!r}")
 
-    def _assign_left_right(self, viewport: Viewport) -> List[LayoutAssignment]:
+    def _left_right_child_viewports(self, viewport: Viewport) -> List[tuple[LayoutNode, Viewport]]:
         """Split one viewport into left-to-right child rectangles."""
 
         available = max(0, viewport.width - (self.gutter * (len(self.children) - 1)))
         widths = _allocate_lengths(available, self._resolved_weights)
 
-        assignments: List[LayoutAssignment] = []
+        child_viewports: List[tuple[LayoutNode, Viewport]] = []
         cursor_x = viewport.x
         for child, width in zip(self.children, widths):
             child_viewport = Viewport(cursor_x, viewport.y, width, viewport.height)
-            assignments.extend(child.assign(child_viewport))
+            child_viewports.append((child, child_viewport))
             cursor_x += width + self.gutter
-        return assignments
+        return child_viewports
 
-    def _assign_top_bottom(self, viewport: Viewport) -> List[LayoutAssignment]:
+    def _top_bottom_child_viewports(self, viewport: Viewport) -> List[tuple[LayoutNode, Viewport]]:
         """Split one viewport into top-to-bottom child rectangles."""
 
         available = max(0, viewport.height - (self.gutter * (len(self.children) - 1)))
         heights = _allocate_lengths(available, self._resolved_weights)
 
-        assignments: List[LayoutAssignment] = []
+        child_viewports: List[tuple[LayoutNode, Viewport]] = []
         cursor_y = viewport.y
         for child, height in zip(self.children, heights):
             child_viewport = Viewport(viewport.x, cursor_y, viewport.width, height)
-            assignments.extend(child.assign(child_viewport))
+            child_viewports.append((child, child_viewport))
             cursor_y += height + self.gutter
-        return assignments
+        return child_viewports
 
 
 def resolve_layout(root: LayoutNode, viewport: Viewport) -> Dict[str, Viewport]:
@@ -234,10 +300,17 @@ def resolve_layout(root: LayoutNode, viewport: Viewport) -> Dict[str, Viewport]:
     return resolved
 
 
+def resolve_dividers(root: LayoutNode, viewport: Viewport) -> List[DividerAssignment]:
+    """Resolve all split-divider rectangles for one layout tree."""
+
+    return list(root.dividers(viewport))
+
+
 def columns(
     *children: LayoutChild,
     weights: Optional[Sequence[int]] = None,
-    gutter: int = 0,
+    gutter: int = 1,
+    divider: Optional[str] = None,
 ) -> SplitNode:
     """Create a left-to-right split from region ids or nested layout nodes."""
 
@@ -246,13 +319,15 @@ def columns(
         children=tuple(_coerce_layout_child(child) for child in children),
         weights=weights,
         gutter=gutter,
+        divider=divider,
     )
 
 
 def rows(
     *children: LayoutChild,
     weights: Optional[Sequence[int]] = None,
-    gutter: int = 0,
+    gutter: int = 1,
+    divider: Optional[str] = None,
 ) -> SplitNode:
     """Create a top-to-bottom split from region ids or nested layout nodes."""
 
@@ -261,6 +336,7 @@ def rows(
         children=tuple(_coerce_layout_child(child) for child in children),
         weights=weights,
         gutter=gutter,
+        divider=divider,
     )
 
 

@@ -53,8 +53,8 @@ class TestRenderCoordinator(unittest.TestCase):
         resolved = coordinator.resolve_viewports(viewport=Viewport(0, 0, 50, 15))
 
         self.assertEqual(resolved["left"], Viewport(0, 0, 20, 15))
-        self.assertEqual(resolved["right_top"], Viewport(20, 0, 30, 5))
-        self.assertEqual(resolved["right_bottom"], Viewport(20, 5, 30, 10))
+        self.assertEqual(resolved["right_top"], Viewport(21, 0, 29, 5))
+        self.assertEqual(resolved["right_bottom"], Viewport(21, 6, 29, 9))
 
     def test_resolve_registered_regions_binds_objects_in_leaf_order(self):
         """Leaf resolution should preserve layout order for future compositors."""
@@ -81,7 +81,7 @@ class TestRenderCoordinator(unittest.TestCase):
             [(entry.region_id, entry.region, entry.viewport) for entry in resolved],
             [
                 ("left", left_region, Viewport(0, 0, 5, 3)),
-                ("right", right_region, Viewport(5, 0, 5, 3)),
+                ("right", right_region, Viewport(6, 0, 4, 3)),
             ],
         )
 
@@ -148,8 +148,8 @@ class TestRenderCoordinator(unittest.TestCase):
         rows = coordinator.compose_layout_lines(columns=8, lines=2)
 
         self.assertEqual(rows, [
-            "L1      ",
-            "L2  R1  ",
+            "L1  |   ",
+            "L2  |R1 ",
         ])
 
     def test_compose_layout_lines_supports_nested_split_trees(self):
@@ -178,10 +178,10 @@ class TestRenderCoordinator(unittest.TestCase):
         rows = coordinator.compose_layout_lines(columns=8, lines=4)
 
         self.assertEqual(rows, [
-            "L1  T1  ",
-            "L2      ",
-            "L3  B1  ",
-            "    B2  ",
+            "L1  |T1 ",
+            "L2  |   ",
+            "L3  |---",
+            "    |B2 ",
         ])
 
     def test_compose_layout_lines_uses_visible_width_for_ansi_segments(self):
@@ -202,7 +202,7 @@ class TestRenderCoordinator(unittest.TestCase):
 
         rows = coordinator.compose_layout_lines(columns=6, lines=1)
 
-        self.assertEqual(strip_ansi(rows[0]), "A  B  ")
+        self.assertEqual(strip_ansi(rows[0]), "A  |B ")
 
     def test_compose_layout_lines_supports_log_regions_with_footer(self):
         """The line compositor should preserve body/footer semantics inside panes."""
@@ -235,8 +235,8 @@ class TestRenderCoordinator(unittest.TestCase):
         rows = coordinator.compose_layout_lines(columns=12, lines=4)
 
         self.assertEqual(rows, [
-            "            ",
-            "l-bodyr-body",
-            "l-bodyr-foot",
-            "l-footr-foot",
+            "      |     ",
+            "l-body|r-bod",
+            "l-body|r-foo",
+            "l-foot|r-foo",
         ])

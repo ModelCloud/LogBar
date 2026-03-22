@@ -69,8 +69,8 @@ class TestRegionLogBar(unittest.TestCase):
         rows = coordinator.compose_layout_lines(columns=20, lines=4)
 
         self.assertEqual(rows, [
-            "                    ",
-            "INFO  a1  WARN  b1  ",
-            "INFO  a2  rb1       ",
-            "left-foot rb2       ",
+            "          |         ",
+            "INFO  a1  |WARN  b1 ",
+            "INFO  a2  |rb1      ",
+            "left-foot |rb2      ",
         ])

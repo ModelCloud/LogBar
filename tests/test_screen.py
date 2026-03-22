@@ -118,15 +118,15 @@ class TestRegionScreen(unittest.TestCase):
         rows = screen.render()
 
         self.assertEqual(rows, [
-            "                    ",
-            "                    ",
-            "                    ",
-            "INFO  a1  WARN  b1  ",
+            "          |         ",
+            "          |         ",
+            "          |         ",
+            "INFO  a1  |WARN  b1 ",
         ])
         output = stream.getvalue()
         self.assertTrue(output.startswith("\033[?1049h\033[?25l\033[2J"))
         self.assertEqual(output.count("\033[2K"), 4)
-        self.assertIn("\033[4;1H\033[2KINFO  a1  WARN  b1  ", output)
+        self.assertIn("\033[4;1H\033[2KINFO  a1  |WARN  b1 ", output)
 
         screen.close()
 
@@ -163,16 +163,16 @@ class TestRegionScreen(unittest.TestCase):
         rows = screen.render()
 
         self.assertEqual(rows, [
-            "                    ",
-            "                    ",
-            "INFO  a1            ",
-            "INFO  a2  WARN  b1  ",
+            "          |         ",
+            "          |         ",
+            "INFO  a1  |         ",
+            "INFO  a2  |WARN  b1 ",
         ])
         output = stream.getvalue()
         self.assertNotIn("\033[2J", output)
         self.assertEqual(output.count("\033[2K"), 2)
-        self.assertIn("\033[3;1H\033[2KINFO  a1            ", output)
-        self.assertIn("\033[4;1H\033[2KINFO  a2  WARN  b1  ", output)
+        self.assertIn("\033[3;1H\033[2KINFO  a1  |         ", output)
+        self.assertIn("\033[4;1H\033[2KINFO  a2  |WARN  b1 ", output)
         self.assertTrue(output.endswith("\033[1;1H"))
 
         screen.close()

@@ -71,9 +71,9 @@ class TestRegion(unittest.TestCase):
         frame = coordinator.compose_frame(columns=8, lines=3)
 
         self.assertEqual(frame.to_plain_lines(), [
-            "left    ",
-            "body    ",
-            "    tail",
+            "left|   ",
+            "body|   ",
+            "    |tai",
         ])
 
     def test_log_region_renders_body_above_footer(self):

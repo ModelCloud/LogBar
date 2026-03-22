@@ -12,7 +12,7 @@ from typing import Callable, Dict, Optional, Sequence
 
 from .drawing import ANSI_RESET, strip_ansi, truncate_ansi, visible_length
 from .frame import CellBuffer
-from .layout import LeafNode, LayoutNode, Viewport, resolve_layout as resolve_region_layout
+from .layout import LeafNode, LayoutNode, Viewport, resolve_dividers as resolve_layout_dividers, resolve_layout as resolve_region_layout
 from .region import RenderContext
 
 
@@ -266,6 +266,9 @@ class RenderCoordinator:
                 dest_y=resolved.viewport.y - root_viewport.y,
             )
 
+        for divider in resolve_layout_dividers(self._layout_root, root_viewport):
+            self._draw_divider_into_frame(frame, divider.viewport, divider.fill, root_viewport=root_viewport)
+
         return frame
 
     def compose_root_lines(
@@ -345,6 +348,14 @@ class RenderCoordinator:
                         text=self._normalize_region_line(line, resolved.viewport.width),
                     )
                 )
+
+        for divider in resolve_layout_dividers(self._layout_root, root_viewport):
+            self._append_divider_segments(
+                row_segments,
+                divider.viewport,
+                divider.fill,
+                root_viewport=root_viewport,
+            )
 
         return [
             self._compose_row_from_segments(segments, root_viewport.width)
@@ -464,6 +475,55 @@ class RenderCoordinator:
             parts.append(" " * (total_width - cursor))
 
         return "".join(parts)
+
+    @staticmethod
+    def _append_divider_segments(
+        row_segments: list[list[RowSegment]],
+        divider_viewport: Viewport,
+        fill: str,
+        *,
+        root_viewport: Viewport,
+    ) -> None:
+        """Append one divider rectangle as row segments inside the composed root frame."""
+
+        clipped = divider_viewport.intersection(root_viewport)
+        if clipped.width <= 0 or clipped.height <= 0 or not fill:
+            return
+
+        text = fill[:1] * clipped.width
+        absolute_x = clipped.x - root_viewport.x
+        start_y = clipped.y - root_viewport.y
+        for row_offset in range(clipped.height):
+            absolute_y = start_y + row_offset
+            if absolute_y < 0 or absolute_y >= len(row_segments):
+                continue
+            row_segments[absolute_y].append(
+                RowSegment(
+                    x=absolute_x,
+                    width=clipped.width,
+                    text=text,
+                )
+            )
+
+    @staticmethod
+    def _draw_divider_into_frame(
+        frame: CellBuffer,
+        divider_viewport: Viewport,
+        fill: str,
+        *,
+        root_viewport: Viewport,
+    ) -> None:
+        """Fill one divider rectangle into the composed cell frame."""
+
+        clipped = divider_viewport.intersection(root_viewport)
+        if clipped.width <= 0 or clipped.height <= 0 or not fill:
+            return
+
+        local_x = clipped.x - root_viewport.x
+        local_y = clipped.y - root_viewport.y
+        text = fill[:1] * clipped.width
+        for row_offset in range(clipped.height):
+            frame.draw_text(local_x, local_y + row_offset, text)
 
 
 __all__ = [

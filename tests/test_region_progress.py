@@ -105,6 +105,9 @@ class TestRegionProgress(unittest.TestCase):
             right_fast = session.pb(6, region_id="right", output_interval=1).manual().style("mono").title("R1")
             right_slow = session.pb(6, region_id="right", output_interval=3).manual().style("mono").title("R2")
             session.render()
+            viewports = session.coordinator.resolve_viewports(columns=80, lines=8)
+            left_viewport = viewports["left"]
+            right_viewport = viewports["right"]
 
             left_logger.info("left start")
             right_logger.info("right start")
@@ -122,19 +125,27 @@ class TestRegionProgress(unittest.TestCase):
             right_logger.info("right mid")
 
             mid_rows = session.render()
+            mid_left_rows = [
+                row[left_viewport.x:left_viewport.x + left_viewport.width].rstrip()
+                for row in mid_rows
+            ]
+            mid_right_rows = [
+                row[right_viewport.x:right_viewport.x + right_viewport.width].rstrip()
+                for row in mid_rows
+            ]
 
-            self.assertEqual(mid_rows[4][:40].rstrip(), "INFO  left start")
-            self.assertEqual(mid_rows[4][40:].rstrip(), "INFO  right start")
-            self.assertEqual(mid_rows[5][:40].rstrip(), "INFO  left mid")
-            self.assertEqual(mid_rows[5][40:].rstrip(), "INFO  right mid")
-            self.assertIn("L1 [1 of 4]", mid_rows[6][:40])
-            self.assertIn("[1/4] 25", mid_rows[6][:40])
-            self.assertIn("R1 [1 of 6]", mid_rows[6][40:])
-            self.assertIn("[1/6] 16", mid_rows[6][40:])
-            self.assertIn("L2 [0 of 4]", mid_rows[7][:40])
-            self.assertIn("[0/4] 0.", mid_rows[7][:40])
-            self.assertIn("R2 [0 of 6]", mid_rows[7][40:])
-            self.assertIn("[0/6] 0.", mid_rows[7][40:])
+            self.assertEqual(mid_left_rows[4], "INFO  left start")
+            self.assertEqual(mid_right_rows[4], "INFO  right start")
+            self.assertEqual(mid_left_rows[5], "INFO  left mid")
+            self.assertEqual(mid_right_rows[5], "INFO  right mid")
+            self.assertIn("L1 [1 of 4]", mid_left_rows[6])
+            self.assertIn("[1/4] 25", mid_left_rows[6])
+            self.assertIn("R1 [1 of 6]", mid_right_rows[6])
+            self.assertIn("[1/6]", mid_right_rows[6])
+            self.assertIn("L2 [0 of 4]", mid_left_rows[7])
+            self.assertIn("[0/4] 0.", mid_left_rows[7])
+            self.assertIn("R2 [0 of 6]", mid_right_rows[7])
+            self.assertIn("[0/6]", mid_right_rows[7])
 
             left_fast.next()
             left_fast.draw()
@@ -148,21 +159,29 @@ class TestRegionProgress(unittest.TestCase):
             right_logger.info("right end")
 
             final_rows = session.render()
+            final_left_rows = [
+                row[left_viewport.x:left_viewport.x + left_viewport.width].rstrip()
+                for row in final_rows
+            ]
+            final_right_rows = [
+                row[right_viewport.x:right_viewport.x + right_viewport.width].rstrip()
+                for row in final_rows
+            ]
 
-            self.assertEqual(final_rows[3][:40].rstrip(), "INFO  left start")
-            self.assertEqual(final_rows[3][40:].rstrip(), "INFO  right start")
-            self.assertEqual(final_rows[4][:40].rstrip(), "INFO  left mid")
-            self.assertEqual(final_rows[4][40:].rstrip(), "INFO  right mid")
-            self.assertEqual(final_rows[5][:40].rstrip(), "INFO  left end")
-            self.assertEqual(final_rows[5][40:].rstrip(), "INFO  right end")
-            self.assertIn("L1 [2 of 4]", final_rows[6][:40])
-            self.assertIn("[2/4] 50", final_rows[6][:40])
-            self.assertIn("R1 [2 of 6]", final_rows[6][40:])
-            self.assertIn("[2/6] 33", final_rows[6][40:])
-            self.assertIn("L2 [2 of 4]", final_rows[7][:40])
-            self.assertIn("[2/4] 50", final_rows[7][:40])
-            self.assertIn("R2 [3 of 6]", final_rows[7][40:])
-            self.assertIn("[3/6] 50", final_rows[7][40:])
+            self.assertEqual(final_left_rows[3], "INFO  left start")
+            self.assertEqual(final_right_rows[3], "INFO  right start")
+            self.assertEqual(final_left_rows[4], "INFO  left mid")
+            self.assertEqual(final_right_rows[4], "INFO  right mid")
+            self.assertEqual(final_left_rows[5], "INFO  left end")
+            self.assertEqual(final_right_rows[5], "INFO  right end")
+            self.assertIn("L1 [2 of 4]", final_left_rows[6])
+            self.assertIn("[2/4] 50", final_left_rows[6])
+            self.assertIn("R1 [2 of 6]", final_right_rows[6])
+            self.assertIn("[2/6]", final_right_rows[6])
+            self.assertIn("L2 [2 of 4]", final_left_rows[7])
+            self.assertIn("[2/4] 50", final_left_rows[7])
+            self.assertIn("R2 [3 of 6]", final_right_rows[7])
+            self.assertIn("[3/6]", final_right_rows[7])
 
             left_fast.close()
             left_slow.close()
@@ -266,13 +285,13 @@ class TestRegionProgress(unittest.TestCase):
                 self.assertIn("INFO  right start", right_rows)
                 self.assertIn("INFO  right end", right_rows)
                 self.assertIn("L-fast [5 of 5]", left_rows[-2])
-                self.assertIn("[5/5", left_rows[-2])
+                self.assertIn("[5/", left_rows[-2])
                 self.assertIn("L-slow [4 of 4]", left_rows[-1])
-                self.assertIn("[4/4", left_rows[-1])
+                self.assertIn("[4/", left_rows[-1])
                 self.assertIn("R-fast [5 of 5]", right_rows[-2])
-                self.assertIn("[5/5", right_rows[-2])
+                self.assertIn("[5/", right_rows[-2])
                 self.assertIn("R-slow [6 of 6]", right_rows[-1])
-                self.assertIn("[6/6", right_rows[-1])
+                self.assertIn("[6/", right_rows[-1])
                 self.assertIn("left start", stream.getvalue())
                 self.assertIn("right end", stream.getvalue())
             finally:

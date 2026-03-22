@@ -68,13 +68,14 @@ class RegionScreenSession:
         cls,
         *children,
         weights=None,
-        gutter: int = 0,
+        gutter: int = 1,
+        divider: Optional[str] = None,
         **kwargs,
     ) -> "RegionScreenSession":
         """Create one session whose root layout is a left-to-right split."""
 
         return cls(
-            layout_root=layout_columns(*children, weights=weights, gutter=gutter),
+            layout_root=layout_columns(*children, weights=weights, gutter=gutter, divider=divider),
             **kwargs,
         )
 
@@ -83,13 +84,14 @@ class RegionScreenSession:
         cls,
         *children,
         weights=None,
-        gutter: int = 0,
+        gutter: int = 1,
+        divider: Optional[str] = None,
         **kwargs,
     ) -> "RegionScreenSession":
         """Create one session whose root layout is a top-to-bottom split."""
 
         return cls(
-            layout_root=layout_rows(*children, weights=weights, gutter=gutter),
+            layout_root=layout_rows(*children, weights=weights, gutter=gutter, divider=divider),
             **kwargs,
         )
 

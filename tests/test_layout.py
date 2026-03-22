@@ -7,7 +7,7 @@
 
 import unittest
 
-from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport, columns, pane, resolve_layout, rows
+from logbar.layout import DividerAssignment, LeafNode, SplitDirection, SplitNode, Viewport, columns, pane, resolve_dividers, resolve_layout, rows
 
 
 class TestLayout(unittest.TestCase):
@@ -35,8 +35,8 @@ class TestLayout(unittest.TestCase):
         resolved = resolve_layout(layout, Viewport(0, 0, 50, 15))
 
         self.assertEqual(resolved["left"], Viewport(0, 0, 20, 15))
-        self.assertEqual(resolved["right_top"], Viewport(20, 0, 30, 5))
-        self.assertEqual(resolved["right_bottom"], Viewport(20, 5, 30, 10))
+        self.assertEqual(resolved["right_top"], Viewport(21, 0, 29, 5))
+        self.assertEqual(resolved["right_bottom"], Viewport(21, 6, 29, 9))
 
     def test_layout_distributes_remainder_to_earliest_children(self):
         """Keep fractional split allocation deterministic for odd dimensions."""
@@ -53,8 +53,8 @@ class TestLayout(unittest.TestCase):
 
         resolved = resolve_layout(layout, Viewport(0, 0, 8, 4))
 
-        self.assertEqual(resolved["one"], Viewport(0, 0, 3, 4))
-        self.assertEqual(resolved["two"], Viewport(3, 0, 3, 4))
+        self.assertEqual(resolved["one"], Viewport(0, 0, 2, 4))
+        self.assertEqual(resolved["two"], Viewport(3, 0, 2, 4))
         self.assertEqual(resolved["three"], Viewport(6, 0, 2, 4))
 
     def test_layout_respects_gutters_between_children(self):
@@ -100,8 +100,20 @@ class TestLayout(unittest.TestCase):
         resolved = resolve_layout(layout, Viewport(0, 0, 50, 15))
 
         self.assertEqual(resolved["left"], Viewport(0, 0, 20, 15))
-        self.assertEqual(resolved["right_top"], Viewport(20, 0, 30, 8))
-        self.assertEqual(resolved["right_bottom"], Viewport(20, 8, 30, 7))
+        self.assertEqual(resolved["right_top"], Viewport(21, 0, 29, 7))
+        self.assertEqual(resolved["right_bottom"], Viewport(21, 8, 29, 7))
+
+    def test_default_split_layout_resolves_one_char_dividers(self):
+        """Default split nodes should reserve and expose a one-cell divider."""
+
+        layout = columns("left", rows("right_top", "right_bottom"))
+
+        dividers = resolve_dividers(layout, Viewport(0, 0, 20, 8))
+
+        self.assertEqual(dividers, [
+            DividerAssignment(viewport=Viewport(10, 0, 1, 8), fill="|"),
+            DividerAssignment(viewport=Viewport(11, 4, 9, 1), fill="-"),
+        ])
 
     def test_public_layout_helpers_reject_unknown_child_types(self):
         """Public helpers should fail fast on unsupported child values."""
