@@ -5,7 +5,9 @@
 
 """Column layout helpers for LogBar output."""
 
+import threading
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .drawing import strip_ansi as _strip_ansi
@@ -20,6 +22,17 @@ def _pad_visible(text: str, target: int) -> str:
     if current >= target:
         return text
     return f"{text}{' ' * (target - current)}"
+
+
+def _columns_locked(method):
+    """Serialize one `ColumnsPrinter` API call through its instance lock."""
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 @dataclass
@@ -95,6 +108,7 @@ class ColumnsPrinter:
         self._level_max_length = level_max_length
         self._terminal_size = terminal_size_provider or terminal_size
         self._level_proxies: Dict[Any, ColumnsPrinter._LevelProxy] = {}
+        self._lock = threading.RLock()
 
         if headers:
             self._set_columns(headers)
@@ -103,20 +117,24 @@ class ColumnsPrinter:
     def widths(self) -> List[int]:
         """Return a copy of the current slot widths."""
 
-        return list(self._slot_widths)
+        with self._lock:
+            return list(self._slot_widths)
 
     @property
     def padding(self) -> int:
         """Return the configured horizontal padding per slot side."""
 
-        return self._padding
+        with self._lock:
+            return self._padding
 
     @property
     def column_specs(self) -> List[ColumnSpec]:
         """Return a defensive copy of the logical column definitions."""
 
-        return [ColumnSpec(spec.label, spec.span, spec.width) for spec in self._columns]
+        with self._lock:
+            return [ColumnSpec(spec.label, spec.span, spec.width) for spec in self._columns]
 
+    @_columns_locked
     def width(self, width: Optional[Union[str, int, float]] = None):
         """Return the currently resolved table width including separators."""
 
@@ -134,6 +152,7 @@ class ColumnsPrinter:
 
         return self._get_target_width() + separator_count
 
+    @_columns_locked
     def update(self, updates: Dict[str, Dict[str, Any]]):
         """Mutate existing columns by label and recompute the layout."""
 
@@ -212,6 +231,7 @@ class ColumnsPrinter:
 
         return self._level_proxy(self._level_enum.CRITICAL)
 
+    @_columns_locked
     def _log_header(self, level: Any) -> str:
         """Emit the bordered header block for the current columns."""
 
@@ -225,6 +245,7 @@ class ColumnsPrinter:
         self._emit_border(level, force=True)
         return row
 
+    @_columns_locked
     def _log_values(self, level: Any, values: Iterable) -> str:
         """Emit one bordered row after updating column widths from the values."""
 
@@ -236,12 +257,14 @@ class ColumnsPrinter:
         self._emit_border(level, force=True)
         return row
 
+    @_columns_locked
     def _simulate_values(self, level: Any, values: Iterable) -> None:
         """Update width state as if a row were rendered, without output."""
 
         values_list = self._prepare_values(values)
         self._update_slot_widths(values_list)
 
+    @_columns_locked
     def _set_columns(self, headers: Sequence) -> None:
         """Replace the logical column definitions and rebuild layout state."""
 

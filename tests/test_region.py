@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: 2024-2025 ModelCloud.ai
+# SPDX-FileCopyrightText: 2024-2025 qubitium@modelcloud.ai
+# SPDX-License-Identifier: Apache-2.0
+# Contact: qubitium@modelcloud.ai, x.com/qubitium
+
+"""Tests for region render primitives and composed coordinator frames."""
+
+import unittest
+
+from logbar.coordinator import RenderCoordinator
+from logbar.layout import LeafNode, SplitDirection, SplitNode, Viewport
+from logbar.region import LineRegion, LogRegion, RenderContext, TextRegion
+
+
+class TestRegion(unittest.TestCase):
+    """Coverage for viewport-local region rendering."""
+
+    def test_text_region_renders_from_top_by_default(self):
+        """Text regions should render visible lines from the top edge."""
+
+        region = TextRegion(["alpha", "beta", "gamma"])
+        buffer = region.render(RenderContext(viewport=Viewport(0, 0, 4, 2), root_viewport=Viewport(0, 0, 4, 2)))
+
+        self.assertEqual(buffer.to_plain_lines(), [
+            "alph",
+            "beta",
+        ])
+
+    def test_text_region_can_anchor_lines_to_bottom(self):
+        """Bottom-anchored regions should reserve space above short content."""
+
+        region = TextRegion(["tail"], vertical_anchor="bottom")
+        buffer = region.render(RenderContext(viewport=Viewport(0, 0, 4, 3), root_viewport=Viewport(0, 0, 4, 3)))
+
+        self.assertEqual(buffer.to_plain_lines(), [
+            "    ",
+            "    ",
+            "tail",
+        ])
+
+    def test_line_region_render_lines_clips_bottom_without_blank_padding(self):
+        """Line regions should expose only visible anchored rows for ANSI-style backends."""
+
+        region = LineRegion(["one", "two", "three"], vertical_anchor="bottom")
+
+        visible = region.render_lines(
+            RenderContext(
+                viewport=Viewport(0, 0, 10, 2),
+                root_viewport=Viewport(0, 0, 10, 2),
+            )
+        )
+
+        self.assertEqual(visible, ["two", "three"])
+
+    def test_coordinator_composes_registered_regions_into_one_frame(self):
+        """Coordinator composition should blit leaf region buffers into root space."""
+
+        coordinator = RenderCoordinator()
+        coordinator.set_layout(
+            SplitNode(
+                direction=SplitDirection.LEFT_RIGHT,
+                children=(
+                    LeafNode("left"),
+                    LeafNode("right"),
+                ),
+            )
+        )
+        coordinator.register_region("left", TextRegion(["left", "body"]))
+        coordinator.register_region("right", TextRegion(["tail"], vertical_anchor="bottom"))
+
+        frame = coordinator.compose_frame(columns=8, lines=3)
+
+        self.assertEqual(frame.to_plain_lines(), [
+            "left|   ",
+            "body|   ",
+            "    |tai",
+        ])
+
+    def test_log_region_renders_body_above_footer(self):
+        """Pane regions should keep footer rows anchored at the bottom."""
+
+        region = LogRegion(
+            ["body-1", "body-2", "body-3"],
+            footer_lines=["foot-1", "foot-2"],
+        )
+
+        rows = region.render_lines(
+            RenderContext(
+                viewport=Viewport(0, 0, 8, 4),
+                root_viewport=Viewport(0, 0, 8, 4),
+            )
+        )
+
+        self.assertEqual(rows, [
+            "body-2",
+            "body-3",
+            "foot-1",
+            "foot-2",
+        ])
+
+    def test_log_region_bottom_aligns_short_body_area(self):
+        """Short body content should stay nearest the footer within remaining space."""
+
+        region = LogRegion(
+            ["body-only"],
+            footer_lines=["foot"],
+        )
+
+        rows = region.render_lines(
+            RenderContext(
+                viewport=Viewport(0, 0, 8, 4),
+                root_viewport=Viewport(0, 0, 8, 4),
+            )
+        )
+
+        self.assertEqual(rows, [
+            "",
+            "",
+            "body-only",
+            "foot",
+        ])

@@ -78,6 +78,36 @@ cols.info.header()
 cols.info("render", "active", "width and alignment stay terminal-aware")
 ```
 
+Experimental split-screen sessions:
+
+```py
+from logbar import RegionScreenSession, rows
+
+with RegionScreenSession.columns("left", rows("right_top", "right_bottom")) as ui:
+    left = ui.create_logger("left", supports_ansi=False)
+    right_top = ui.create_logger("right_top", supports_ansi=False)
+    right_bottom = ui.create_logger("right_bottom", supports_ansi=False)
+
+    left.setLevel("INFO")
+    right_top.setLevel("INFO")
+    right_bottom.setLevel("INFO")
+
+    left.info("download queue ready")
+    right_top.info("worker online")
+    right_bottom.set_footer_lines(["gpu warmup", "epoch 1/8"])
+```
+
+Plain-text sketch:
+
+```text
++----------------------+----------------------+
+| INFO  download ...   | INFO  worker online  |
+|                      |----------------------|
+|                      | gpu warmup           |
+|                      | epoch 1/8            |
++----------------------+----------------------+
+```
+
 # Quick Start
 
 ```py
