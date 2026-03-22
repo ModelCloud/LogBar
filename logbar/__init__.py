@@ -6,5 +6,6 @@
 """Top-level package for the LogBar utility."""
 
 from .logbar import LogBar
+from .region_logger import RegionLogBar
 
-__all__ = ["LogBar"]
+__all__ = ["LogBar", "RegionLogBar"]

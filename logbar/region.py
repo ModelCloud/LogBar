@@ -159,6 +159,18 @@ class LogRegion(Region):
         self._footer_lines = [str(line) for line in lines]
         return self
 
+    def append_footer_line(self, line: str) -> "LogRegion":
+        """Append one footer row at the bottom of the region."""
+
+        self._footer_lines.append(str(line))
+        return self
+
+    def extend_footer_lines(self, lines: Sequence[str]) -> "LogRegion":
+        """Append multiple footer rows in order."""
+
+        self._footer_lines.extend(str(line) for line in lines)
+        return self
+
     def clear_footer(self) -> "LogRegion":
         """Remove all footer content from the region."""
 

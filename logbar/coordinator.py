@@ -171,6 +171,34 @@ class RenderCoordinator:
 
         return dict(self._regions)
 
+    def create_region_logger(
+        self,
+        region_id: str,
+        *,
+        name: Optional[str] = None,
+        supports_ansi: bool = True,
+    ) -> "RegionLogBar":
+        """Return a region-bound logger backed by one registered LogRegion."""
+
+        from .region import LogRegion
+        from .region_logger import RegionLogBar
+
+        normalized = str(region_id).strip()
+        if not normalized:
+            raise ValueError("region_id must not be empty.")
+
+        region = self.region(normalized)
+        if region is None:
+            region = self.register_region(normalized, LogRegion())
+        elif not isinstance(region, LogRegion):
+            raise TypeError(f"Registered region {normalized!r} is not a LogRegion.")
+
+        return RegionLogBar(
+            name or normalized,
+            region=region,
+            supports_ansi=supports_ansi,
+        )
+
     def resolve_registered_regions(
         self,
         *,
