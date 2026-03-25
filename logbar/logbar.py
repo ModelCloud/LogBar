@@ -1370,20 +1370,20 @@ class LogBar(logging.Logger):
             coordinator_state._deferred_log_records.append((normalized_level, str_msg))
             return
 
-        stacked_log_insert = _prepare_progress_stack_for_log_locked(backend_state=backend_state)
-        if not stacked_log_insert:
-            _clear_progress_stack_locked(for_log_output=True, backend_state=backend_state)
+        # Preserve terminal history when logs arrive above an active bottom
+        # stack: clear the live footer using the log-output path before
+        # printing, instead of parking on the same row and rewriting it.
+        _clear_progress_stack_locked(
+            show_cursor=False,
+            for_log_output=True,
+            backend_state=backend_state,
+        )
 
         prefix = _level_prefix(level_label, backend_state.supports_ansi)
         _print(f"\r{prefix}{rendered_message}", end='\n', flush=True)
 
         with _STATE_LOCK:
             last_rendered_length = printable_length
-
-        if stacked_log_insert:
-            _write('\033[1A\r')
-            _flush_stream()
-            coordinator_state._cursor_positioned_above_stack = True
 
         _render_progress_stack_locked(backend_state=backend_state)
 

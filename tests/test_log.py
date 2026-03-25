@@ -288,8 +288,8 @@ class TestProgressBar(unittest.TestCase):
                     pass
             sys.stdout = original_stdout
 
-    def test_logging_above_active_progress_stack_avoids_scroll_clear_path(self):
-        """Insert logs above a live stack without using the old scroll-clear path."""
+    def test_logging_above_active_progress_stack_preserves_scroll_history(self):
+        """Insert logs above a live stack using the scroll-preserving clear path."""
 
         from logbar import logbar as logbar_module
 
@@ -340,7 +340,7 @@ class TestProgressBar(unittest.TestCase):
             raw = buffer.getvalue()
             lines = extract_rendered_lines(raw)
 
-            self.assertNotIn("\033[1S", raw)
+            self.assertIn("\033[1S", raw)
             self.assertTrue(any("stacked message" in line for line in lines))
             for stack_line in stack_lines:
                 self.assertIn(stack_line, lines)
@@ -351,7 +351,7 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.detach_progress_bar(row)
 
     def test_logging_above_active_progress_stack_forces_full_redraw(self):
-        """Invalidate the diff renderer after a log lands above the stack."""
+        """Restore the full stack after a log lands above it."""
 
         from logbar import logbar as logbar_module
 
@@ -400,11 +400,12 @@ class TestProgressBar(unittest.TestCase):
                 log.info("message above stack")
 
             delta = buffer.getvalue()[checkpoint:]
-            self.assertIn("\033[2K", delta)
-            self.assertNotIn("\033[1S", delta)
+            self.assertNotIn("\033[2K", delta)
+            self.assertIn("\033[1S", delta)
             self.assertNotIn("\033[1L", delta)
             self.assertIn(rows[0].line.ljust(columns), ANSI_ESCAPE_RE.sub('', delta))
             self.assertIn(rows[1].line.ljust(columns), ANSI_ESCAPE_RE.sub('', delta))
+            self.assertIn("message above stack", ANSI_ESCAPE_RE.sub('', delta))
         finally:
             with redirect_stdout(buffer):
                 logbar_module.clear_progress_stack()
