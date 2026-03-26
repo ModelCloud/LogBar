@@ -5,9 +5,16 @@
 
 import io
 import logging
+import os
+from pathlib import Path
 import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
+import textwrap
 from contextlib import redirect_stdout
 import unittest
 from unittest import mock
@@ -804,3 +811,140 @@ class TestProgressBar(unittest.TestCase):
                 logbar_module.clear_progress_stack()
             for row in rows:
                 logbar_module.detach_progress_bar(row)
+
+    def test_shutdown_default_renderer_restores_cursor_for_leaked_stack(self):
+        """Exit cleanup should show the cursor and clear leaked footer state."""
+
+        from logbar import logbar as logbar_module
+
+        class TTYBuffer(io.StringIO):
+            """TTY-like capture stream used to keep cursor rendering enabled."""
+
+            def isatty(self):
+                """Pretend to be a TTY for the renderer under test."""
+
+                return True
+
+        class StaticRenderable:
+            """Minimal stacked renderable that always returns one static line."""
+
+            def __init__(self, line: str):
+                """Store the line content and renderer bookkeeping fields."""
+
+                self.line = line
+                self.closed = False
+                self._last_rendered_line = ""
+
+            def _resolve_rendered_line(self, columns: int, force: bool = False, allow_repeat: bool = False):
+                """Render the stored line padded to the requested width."""
+
+                rendered = self.line[:columns].ljust(columns)
+                self._last_rendered_line = rendered
+                return rendered
+
+        columns = 32
+        rows = [
+            StaticRenderable("top row"),
+            StaticRenderable("bottom row"),
+        ]
+        buffer = TTYBuffer()
+
+        try:
+            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+                 mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
+                 mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
+                 redirect_stdout(buffer):
+                for row in rows:
+                    logbar_module.attach_progress_bar(row)
+
+                logbar_module.render_progress_stack()
+                self.assertTrue(logbar_module._cursor_hidden)
+                checkpoint = len(buffer.getvalue())
+                logbar_module._shutdown_default_renderer()
+
+            delta = buffer.getvalue()[checkpoint:]
+
+            self.assertIn("\033[?25h", delta)
+            self.assertFalse(logbar_module._cursor_hidden)
+            self.assertEqual(logbar_module._last_drawn_progress_count, 0)
+            self.assertEqual(logbar_module._attached_progress_bars, [])
+        finally:
+            with redirect_stdout(buffer):
+                logbar_module._shutdown_default_renderer()
+
+    def test_pytest_verbose_warning_summary_restores_cursor_on_process_exit(self):
+        """A leaked live stack should not leave a PTY session with a hidden cursor."""
+
+        script_bin = shutil.which("script")
+        if script_bin is None:
+            self.skipTest("`script` is required for PTY regression coverage.")
+        pytest_bin = shutil.which("pytest")
+        if pytest_bin is None:
+            self.skipTest("`pytest` console entrypoint is required for PTY regression coverage.")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            repro_path = temp_path / "pytest_warning_repro.py"
+            transcript_path = temp_path / "pytest_warning_repro.typescript"
+
+            repro_path.write_text(
+                textwrap.dedent(
+                    """
+                    import time
+                    import warnings
+
+                    from logbar import LogBar
+
+
+                    log = LogBar.shared(override_logger=True)
+                    LEAKED = []
+
+
+                    def test_warning_summary_with_leaked_live_stack():
+                        spinner = log.spinner(title="rolling spinner", interval=0.02)
+                        progress = log.pb(range(2)).title("top progress").manual()
+                        LEAKED.extend((spinner, progress))
+
+                        for idx in range(2):
+                            progress.next()
+                            progress.draw(force=True)
+                            log.info("rolling log %s", idx + 1)
+                            time.sleep(0.03)
+
+                        warnings.warn("synthetic torchao deprecation", DeprecationWarning)
+                        time.sleep(0.05)
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            env = dict(os.environ)
+            existing_pythonpath = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"/root/LogBar{os.pathsep}{existing_pythonpath}"
+                if existing_pythonpath
+                else "/root/LogBar"
+            )
+
+            command = f"{shlex.quote(pytest_bin)} -s -v {shlex.quote(str(repro_path))}"
+            completed = subprocess.run(
+                [script_bin, "-q", "-c", command, str(transcript_path)],
+                cwd="/root/LogBar",
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+            transcript = transcript_path.read_text(encoding="utf-8", errors="replace")
+            hide_count = transcript.count("\x1b[?25l")
+            show_count = transcript.count("\x1b[?25h")
+
+            self.assertEqual(
+                completed.returncode,
+                0,
+                msg=f"nested pytest run failed:\nstdout={completed.stdout}\nstderr={completed.stderr}\n{transcript}",
+            )
+            self.assertGreater(hide_count, 0)
+            self.assertEqual(hide_count, show_count, msg=transcript)

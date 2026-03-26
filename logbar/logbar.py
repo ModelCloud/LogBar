@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
+import atexit
 import builtins
 import logging
 import os
@@ -10,7 +11,7 @@ import sys
 import threading
 import time
 from enum import Enum
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
 from .terminal import RenderBackendState, render_backend_state, terminal_size
@@ -26,6 +27,7 @@ last_rendered_length = 0
 
 _STATE_LOCK = threading.RLock()
 _RENDER_LOCK = threading.RLock()
+_EXTERNAL_TERMINAL_HANDOFF_HOOKS_INSTALLED = False
 
 def _stdout_stream():
     """Return the stdout stream wrapper used by all renderer writes."""
@@ -266,6 +268,100 @@ _sync_default_coordinator_state()
 _REFRESH_INTERVAL_SECONDS = 0.1
 
 
+def _running_under_pytest() -> bool:
+    """Best-effort detection for pytest-driven terminal sessions."""
+
+    argv0 = os.path.basename(str(sys.argv[0])).lower()
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in argv0
+
+
+def _install_external_terminal_handoff_hooks() -> None:
+    """Install framework-specific terminal handoff hooks when available.
+
+    The underlying problem is not pytest-specific: any framework that writes
+    directly to the terminal while LogBar still owns a bottom footer can land
+    output inside the footer footprint while the cursor is hidden and parked at
+    the stack anchor. Pytest is the concrete case we reproduced because it
+    prints `PASSED` and the warnings summary after the test body has already
+    returned, outside LogBar's normal log path.
+    """
+
+    global _EXTERNAL_TERMINAL_HANDOFF_HOOKS_INSTALLED
+
+    if _EXTERNAL_TERMINAL_HANDOFF_HOOKS_INSTALLED:
+        return
+
+    _install_pytest_terminal_handoff_adapter()
+    _EXTERNAL_TERMINAL_HANDOFF_HOOKS_INSTALLED = True
+
+
+def _install_pytest_terminal_handoff_adapter() -> None:
+    """Teach pytest to hand the terminal back before it writes session output."""
+
+    if not _running_under_pytest():
+        return
+
+    try:
+        from _pytest.terminal import TerminalReporter
+    except Exception:
+        TerminalReporter = None
+
+    try:
+        from _pytest._io.terminalwriter import TerminalWriter
+    except Exception:
+        TerminalWriter = None
+
+    def _wrap_method(method_name: str) -> None:
+        if TerminalReporter is None:
+            return
+        original = getattr(TerminalReporter, method_name, None)
+        if not callable(original) or getattr(original, "_logbar_terminal_handoff_wrapped", False):
+            return
+
+        @wraps(original)
+        def _wrapped(self, *args, **kwargs):
+            # Observed failure: pytest would print `PASSED` or the warnings
+            # summary while LogBar still had a live stacked footer. That
+            # foreign write bypasses LogBar's own log-above-stack path, so we
+            # must explicitly release the footer before pytest writes.
+            if _coordinator_state()._last_drawn_progress_count > 0:
+                try:
+                    _shutdown_default_renderer()
+                except Exception:
+                    pass
+            return original(self, *args, **kwargs)
+
+        setattr(_wrapped, "_logbar_terminal_handoff_wrapped", True)
+        setattr(TerminalReporter, method_name, _wrapped)
+
+    def _wrap_writer_method(method_name: str) -> None:
+        if TerminalWriter is None:
+            return
+
+        original = getattr(TerminalWriter, method_name, None)
+        if not callable(original) or getattr(original, "_logbar_terminal_handoff_wrapped", False):
+            return
+
+        @wraps(original)
+        def _wrapped(self, *args, **kwargs):
+            # `write_raw()` is the last common sink before bytes hit the
+            # terminal. Wrapping it catches pytest output paths that bypass the
+            # higher-level reporter helpers.
+            if _coordinator_state()._last_drawn_progress_count > 0:
+                try:
+                    _shutdown_default_renderer()
+                except Exception:
+                    pass
+            return original(self, *args, **kwargs)
+
+        setattr(_wrapped, "_logbar_terminal_handoff_wrapped", True)
+        setattr(TerminalWriter, method_name, _wrapped)
+
+    for method_name in ("write", "line", "write_line", "rewrite", "write_sep"):
+        _wrap_method(method_name)
+    _wrap_writer_method("write_raw")
+
+
 def _set_stack_cursor_anchor(line_count: int, terminal_rows: int) -> None:
     """Record whether the cursor is parked above the stack or on its top row."""
 
@@ -379,9 +475,16 @@ def _clear_progress_stack_locked(
     *,
     show_cursor: bool = True,
     for_log_output: bool = False,
+    flush_deferred_logs: bool = True,
     backend_state: Optional[RenderBackendState] = None,
 ) -> None:
-    """Erase the active stack and reset all renderer bookkeeping."""
+    """Erase the active stack and reset all renderer bookkeeping.
+
+    `flush_deferred_logs` is normally enabled so fullscreen stacks replay any
+    buffered log lines after the footer clears. Shutdown paths disable it
+    because, during interpreter teardown, replaying deferred logs can create
+    fresh writes after we just released terminal ownership.
+    """
 
     coordinator_state = _coordinator_state()
     count = coordinator_state._last_drawn_progress_count
@@ -399,7 +502,7 @@ def _clear_progress_stack_locked(
         coordinator_state._stack_redraw_invalidated = False
         if show_cursor:
             _set_cursor_visibility_locked(True, backend_state=state)
-        if not for_log_output:
+        if flush_deferred_logs and not for_log_output:
             _flush_deferred_logs_locked()
         return
 
@@ -411,7 +514,7 @@ def _clear_progress_stack_locked(
         coordinator_state._stack_redraw_invalidated = False
         if show_cursor:
             _set_cursor_visibility_locked(True, backend_state=state)
-        if not for_log_output:
+        if flush_deferred_logs and not for_log_output:
             _flush_deferred_logs_locked()
         return
 
@@ -450,8 +553,146 @@ def _clear_progress_stack_locked(
     coordinator_state._stack_redraw_invalidated = False
     if show_cursor:
         _set_cursor_visibility_locked(True, backend_state=state)
-    if not for_log_output:
+    if flush_deferred_logs and not for_log_output:
         _flush_deferred_logs_locked()
+
+
+def _write_exit_sequence(data: str) -> bool:
+    """Write raw ANSI directly to the terminal file descriptors when possible.
+
+    During late shutdown we observed that stdio wrappers can be partially torn
+    down even though the controlling terminal still exists. Writing straight to
+    the file descriptors, and finally `/dev/tty`, gives the cursor-restore
+    sequence a better chance to land than going through buffered stdout.
+    """
+
+    if not data:
+        return True
+
+    payload = data.encode("utf-8", errors="ignore")
+    for fd in (1, 2):
+        try:
+            os.write(fd, payload)
+            return True
+        except OSError:
+            continue
+
+    tty_fd = None
+    try:
+        tty_fd = os.open("/dev/tty", os.O_WRONLY)
+        os.write(tty_fd, payload)
+        return True
+    except OSError:
+        return False
+    finally:
+        if tty_fd is not None:
+            try:
+                os.close(tty_fd)
+            except OSError:
+                pass
+
+
+def _clear_progress_stack_for_exit() -> None:
+    """Clear the last known footer footprint without probing stdout again.
+
+    This uses only the last recorded stack geometry. It exists for teardown
+    scenarios where capability probes or normal stdout writes are no longer
+    trustworthy, but we still need to erase the leaked footer and show the
+    cursor before the process exits.
+    """
+
+    coordinator_state = _coordinator_state()
+    count = coordinator_state._last_drawn_progress_count
+    sequences: list[str] = []
+
+    if count > 0:
+        if coordinator_state._cursor_positioned_above_stack:
+            sequences.append('\033[1B')
+        elif coordinator_state._cursor_positioned_on_stack_top:
+            sequences.append('\r')
+        else:
+            sequences.append('\r')
+            if count > 1:
+                sequences.append(f'\033[{count - 1}A')
+
+        sequences.append('\r')
+        sequences.append('\033[J')
+
+    sequences.append('\033[?25h')
+    _write_exit_sequence(''.join(sequences))
+
+    coordinator_state._last_drawn_progress_count = 0
+    coordinator_state._last_rendered_terminal_size = None
+    coordinator_state._last_rendered_progress_lines = []
+    coordinator_state._cursor_positioned_above_stack = False
+    coordinator_state._cursor_positioned_on_stack_top = False
+    coordinator_state._stack_redraw_invalidated = False
+    coordinator_state._cursor_hidden = False
+
+
+def _shutdown_default_renderer() -> None:
+    """Best-effort process-exit cleanup for leaked footer renderables.
+
+    If a bar leaks past the end of a test or CLI command, LogBar can still own
+    the terminal when some other code starts printing. The concrete reproduction
+    was pytest emitting `PASSED` and its warnings summary above a live stacked
+    footer, leaving the cursor hidden and the terminal in a bad state until
+    `reset`. This shutdown path force-releases that ownership.
+    """
+
+    global last_rendered_length
+
+    attached_bars = []
+    backend_state = None
+    cursor_was_hidden = False
+
+    try:
+        with _RENDER_LOCK:
+            with _STATE_LOCK:
+                coordinator_state = _coordinator_state()
+                attached_bars = list(coordinator_state._attached_progress_bars)
+                cursor_was_hidden = bool(coordinator_state._cursor_hidden)
+                coordinator_state._attached_progress_bars = []
+                coordinator_state._dirty_progress_bars.clear()
+                coordinator_state._deferred_log_records = []
+                coordinator_state._refresh_thread = None
+
+            try:
+                backend_state = _current_render_backend_state()
+            except Exception:
+                backend_state = None
+
+            if backend_state is not None and backend_state.supports_cursor:
+                try:
+                    # Normal path: we can still talk to the terminal through
+                    # the current stdout backend, so reuse the ordinary stack
+                    # clear logic and explicitly show the cursor.
+                    _clear_progress_stack_locked(
+                        show_cursor=True,
+                        flush_deferred_logs=False,
+                        backend_state=backend_state,
+                    )
+                except Exception:
+                    # Late-teardown fallback: rely on the last known stack
+                    # state and write escape codes directly to the terminal.
+                    _clear_progress_stack_for_exit()
+            elif cursor_was_hidden or _coordinator_state()._last_drawn_progress_count > 0:
+                _clear_progress_stack_for_exit()
+
+            last_rendered_length = 0
+
+            for bar in attached_bars:
+                try:
+                    setattr(bar, "_attached", False)
+                    setattr(bar, "_attached_logger", None)
+                    setattr(bar, "_last_rendered_line", "")
+                except Exception:
+                    continue
+    except Exception:
+        return
+
+
+atexit.register(_shutdown_default_renderer)
 
 
 def _prepare_progress_stack_for_log_locked(backend_state: Optional[RenderBackendState] = None) -> bool:
@@ -1010,6 +1251,7 @@ class LogBar(logging.Logger):
         """Return the process-wide shared LogBar instance."""
 
         global logger
+        _install_external_terminal_handoff_hooks()
 
         created_logger = False
         shared_logger = None
