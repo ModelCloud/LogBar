@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
@@ -279,6 +280,8 @@ class TestThreadSafety(unittest.TestCase):
     def test_split_session_progress_attach_draw_and_refresh_can_overlap(self):
         """Pane-local progress/session operations should stay race-free."""
 
+        # fixed TTY mode has ANSI chars, which caused assert failed
+        os.environ["NO_COLOR"]="1"
         session = RegionScreenSession.columns(
             "left",
             "right",
