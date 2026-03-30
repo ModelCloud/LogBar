@@ -24,6 +24,7 @@ from logbar import LogBar
 from logbar.buffer import QueueingStdout, get_buffered_stdout
 
 log = LogBar.shared(override_logger=True)
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -921,15 +922,15 @@ class TestProgressBar(unittest.TestCase):
             env = dict(os.environ)
             existing_pythonpath = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = (
-                f"/root/LogBar{os.pathsep}{existing_pythonpath}"
+                f"{REPO_ROOT}{os.pathsep}{existing_pythonpath}"
                 if existing_pythonpath
-                else "/root/LogBar"
+                else str(REPO_ROOT)
             )
 
             command = f"{shlex.quote(pytest_bin)} -s -v {shlex.quote(str(repro_path))}"
             completed = subprocess.run(
                 [script_bin, "-q", "-c", command, str(transcript_path)],
-                cwd="/root/LogBar",
+                cwd=str(REPO_ROOT),
                 env=env,
                 capture_output=True,
                 text=True,
