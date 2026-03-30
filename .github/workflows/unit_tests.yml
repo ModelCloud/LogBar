@@ -10,6 +10,10 @@ on:
 
 env:
   CUDA_DEVICE_ORDER: PCI_BUS_ID
+  UV_TORCH_BACKEND: cu130
+  TORCH_VERSION: 2.11.0
+  PYTHON_VERSION: 3.14t
+  UV_PYTHON: 3.14t
 
 jobs:
 
@@ -46,11 +50,17 @@ jobs:
     needs:
       - list-test-files
     container:
-      image: 10.0.13.31:5000/nvidia/cuda:130-ubuntu22.04_1021
+      image: 10.0.13.31:5000/nvidia/cuda:130-ubuntu24.04_0325
       volumes:
-        - /monster/ci/pyenv:/opt/pyenv
+        - /monster/ci/env/entrypoint.sh:/entrypoint.sh
+        - /monster/ci/env/entrypoint.sh:/etc/profile.d/01-entrypoint.sh
+        - /dev/dri/by-path:/dev/dri/by-path
         - /monster/ci/models:/monster/data/model
+        - /monster/ci/dataset:/monster/data/model/dataset
         - /monster/ci/huggingface:/github/home/.cache/huggingface
+        - /monster/ci/uv:/opt/uv
+        - /monster/ci/env:/opt/env
+        - /monster/ci/dist:/opt/dist
     strategy:
       fail-fast: false
       matrix:
@@ -58,27 +68,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Print Env
+      - name: Activate uv env
         run: |
-          env_name="logbar_unit_test_py314_${{ matrix.test_script }}"
+          env_name="logbar_unit_test_py314t_${{ matrix.test_script }}"
+          source /opt/uv/setup_uv_venv.sh $env_name
 
-          echo "env name: $env_name"
-
-          if [ -d "$(pyenv root)/versions/$env_name" ]; then
-            echo "env exists, skip"
-          else
-            echo "creating venv..."
-            pyenv virtualenv 3.14 "$env_name"
-          fi
-
-          pyenv local $env_name
-          pyenv activate $env_name
-
-      - name: install requirements
-        run: pip install -U parameterized pytest pytest-xdist
-
-      - name: install
-        run: pip install .
+      - name: Install
+        run: |
+          uv pip install -U parameterized pytest pytest-xdist
+          uv pip install .
 
       - name: test
         run: pytest -n 8 -v tests/${{ matrix.test_script }}
