@@ -4,6 +4,7 @@
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
 import os
+from pathlib import Path
 import subprocess
 import random
 import re
@@ -21,6 +22,7 @@ from logbar.progress import ProgressBar, TITLE_HIGHLIGHT_COLOR, ANSI_BOLD_RESET
 from logbar.logbar import _active_progress_bars
 
 log = LogBar.shared(override_logger=True)
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -234,7 +236,7 @@ class TestProgress(unittest.TestCase):
 
         enabled = subprocess.run(
             [sys.executable, "-c", script],
-            cwd="/root/LogBar",
+            cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
             env={},
@@ -244,7 +246,7 @@ class TestProgress(unittest.TestCase):
 
         disabled = subprocess.run(
             [sys.executable, "-c", script],
-            cwd="/root/LogBar",
+            cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
             env={"LOGBAR_ANIMATION": "0"},
