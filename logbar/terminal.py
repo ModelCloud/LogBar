@@ -165,8 +165,16 @@ def _env_flag_enabled(name: str) -> bool:
     return value not in {"", "0", "false", "off", "no"}
 
 
+# xdist worker markers are set before test modules are imported; cache the flag
+# at import time so tests that patch ``os.environ`` still detect pytest correctly.
+_PYTEST_XDIST_WORKER = bool(os.environ.get("PYTEST_XDIST_WORKER"))
+
+
 def _running_under_pytest() -> bool:
     """Best-effort detection for pytest-driven terminal sessions."""
+
+    if _PYTEST_XDIST_WORKER:
+        return True
 
     argv0 = str(sys.argv[0]).lower() if sys.argv else ""
     return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in argv0
