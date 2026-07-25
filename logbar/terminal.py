@@ -25,6 +25,7 @@ class RenderBackendState:
     supports_cursor: bool
     supports_ansi: bool
     supports_styling: bool
+    headless: bool = False
 
 
 def _stream_terminal_size(stream: Optional[object], fallback: tuple[int, int]) -> Optional[tuple[int, int]]:
@@ -91,6 +92,119 @@ def terminal_size(fallback=(80, 24), stream: Optional[object] = None):
     return (columns, lines)
 
 
+# Environment markers used by AI-agent, remote, or non-interactive runtimes.
+# A match on its own is enough to disable animated/redrawing UI in LogBar.
+_HEADLESS_ENV_VARS = frozenset(
+    [
+        "CI",
+        "CI_NAME",
+        "BUILD_ID",
+        "BUILDKITE",
+        "TEAMCITY_VERSION",
+        "TF_BUILD",
+        "JENKINS_URL",
+        "CIRCLECI",
+        "TRAVIS",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "AGENT",
+        "AI_AGENT",
+        "AGENT_ID",
+        "SMITHERY",
+        "AIDER",
+        "CODEX_HOME",
+        "CODEX_SQLITE_HOME",
+        "CODEX_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_NON_INTERACTIVE",
+        "DEVIN_OUTPOST_SESSION_ID",
+        "DEVIN_OUTPOST_CONNECT_TOKEN",
+        "DEVIN_OUTPOST_GATEWAY_URL",
+        "DEVIN_REMOTE_AUTH_TOKEN",
+        "DEVIN_REMOTE_STATE_DIR",
+        "DEVIN_PTY_BRIDGE_PORT",
+        "JPY_PARENT_PID",
+        "IPYKERNEL_PARENT_PID",
+        "JUPYTER_SERVER_URI",
+        "KAGGLE_KERNEL_RUN_TYPE",
+        "COLAB_GPU",
+        "COLAB_BACKEND_VERSION",
+    ]
+)
+
+# Environment variable name prefixes that strongly indicate an AI-agent shell.
+_HEADLESS_ENV_PREFIXES = (
+    "DEVIN_",
+    "CODEX_",
+    "SMITHERY_",
+    "AIDER_",
+    "CLAUDE_",
+    "ANTHROPIC_",
+    "COPILOT_",
+    "__COG_",
+)
+
+
+def _is_stream_tty(stream: Optional[object]) -> bool:
+    """Best-effort check whether ``stream`` is connected to a real terminal."""
+
+    target = stream if stream is not None else sys.stdout
+    isatty = getattr(target, "isatty", None)
+    if not callable(isatty):
+        return False
+    try:
+        return bool(isatty())
+    except Exception:
+        return False
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when ``name`` is set to a non-empty, non-disabling value."""
+
+    value = str(os.environ.get(name, "")).strip().lower()
+    return value not in {"", "0", "false", "off", "no"}
+
+
+def _running_under_pytest() -> bool:
+    """Best-effort detection for pytest-driven terminal sessions."""
+
+    argv0 = str(sys.argv[0]).lower() if sys.argv else ""
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in argv0
+
+
+def _is_headless_environment(*, notebook: bool = False) -> bool:
+    """Detect non-interactive, AI-agent, notebook, or CI environments.
+
+    Headless detection is intentionally disabled while LogBar is running under
+    pytest so that the test suite can continue to assert against rendered
+    output. Callers can force redrawing with ``LOGBAR_FORCE_PROGRESS=1`` or
+    disable this heuristic with ``LOGBAR_DISABLE_HEADLESS_DETECTION=1``.
+    """
+
+    if _env_flag_enabled("LOGBAR_FORCE_PROGRESS"):
+        return False
+
+    if _env_flag_enabled("LOGBAR_DISABLE_HEADLESS_DETECTION"):
+        return False
+
+    # Do not disable the UI while the test suite is driving it.
+    if _running_under_pytest():
+        return False
+
+    if notebook:
+        return True
+
+    env_vars = os.environ
+    for key in env_vars:
+        if key in _HEADLESS_ENV_VARS or key.startswith(_HEADLESS_ENV_PREFIXES):
+            return True
+
+    if os.environ.get("TERM", "").strip().lower() == "dumb":
+        return True
+
+    return False
+
+
 def render_backend_state(
     *,
     stream: Optional[object] = None,
@@ -104,13 +218,7 @@ def render_backend_state(
     provider = size_provider or (lambda: terminal_size(fallback=fallback, stream=target))
     columns, lines = provider()
 
-    is_tty = False
-    isatty = getattr(target, "isatty", None)
-    if callable(isatty):
-        try:
-            is_tty = bool(isatty())
-        except Exception:
-            is_tty = False
+    is_tty = _is_stream_tty(target)
 
     term_value = str(os.environ.get("TERM", "")).strip().lower()
     force_cursor = bool(os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "").strip())
@@ -138,6 +246,15 @@ def render_backend_state(
     if not disable_styling:
         supports_styling = notebook or force_ansi or is_tty
 
+    headless = _is_headless_environment(notebook=notebook)
+
+    # A headless backend should never claim cursor/ANSI support; the flag is
+    # the canonical signal used by the rest of the renderer to suppress draws.
+    if headless:
+        supports_cursor = False
+        supports_ansi = False
+        supports_styling = False
+
     return RenderBackendState(
         columns=max(0, int(columns)),
         lines=max(0, int(lines)),
@@ -146,4 +263,5 @@ def render_backend_state(
         supports_cursor=supports_cursor,
         supports_ansi=supports_ansi,
         supports_styling=supports_styling,
+        headless=headless,
     )
