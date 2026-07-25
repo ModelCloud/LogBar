@@ -28,6 +28,8 @@ last_rendered_length = 0
 _STATE_LOCK = threading.RLock()
 _RENDER_LOCK = threading.RLock()
 _EXTERNAL_TERMINAL_HANDOFF_HOOKS_INSTALLED = False
+_HEADLESS_LOG_EMITTED = False
+_HEADLESS_LOG_LOCK = threading.RLock()
 
 def _stdout_stream():
     """Return the stdout stream wrapper used by all renderer writes."""
@@ -113,6 +115,38 @@ def _running_in_notebook_environment() -> bool:
     shell = getattr(ip, "__class__", None)
     shell_name = getattr(shell, "__name__", "")
     return shell_name == "ZMQInteractiveShell"
+
+
+def _log_headless_state_once(backend_state: Optional[RenderBackendState] = None) -> None:
+    """Emit a single INFO log when LogBar is running in a headless environment."""
+
+    global _HEADLESS_LOG_EMITTED, logger
+
+    with _HEADLESS_LOG_LOCK:
+        if _HEADLESS_LOG_EMITTED:
+            return
+        _HEADLESS_LOG_EMITTED = True
+
+    if backend_state is None:
+        try:
+            backend_state = _current_render_backend_state()
+        except Exception:
+            return
+
+    if not backend_state.headless:
+        return
+
+    log = logger
+    if log is None:
+        try:
+            log = LogBar.shared()
+        except Exception:
+            return
+
+    log.info(
+        "LogBar: headless/AI-agent/notebook/CI environment detected; "
+        "high-frequency progress bars and animations are disabled."
+    )
 
 
 def _stdout_supports_cursor_movement() -> bool:
@@ -489,6 +523,18 @@ def _clear_progress_stack_locked(
     coordinator_state = _coordinator_state()
     count = coordinator_state._last_drawn_progress_count
     state = backend_state or _current_render_backend_state()
+
+    if state.headless:
+        coordinator_state._last_drawn_progress_count = 0
+        coordinator_state._last_rendered_terminal_size = None
+        coordinator_state._last_rendered_progress_lines = []
+        coordinator_state._cursor_positioned_above_stack = False
+        coordinator_state._cursor_positioned_on_stack_top = False
+        coordinator_state._stack_redraw_invalidated = False
+        if flush_deferred_logs and not for_log_output:
+            _flush_deferred_logs_locked()
+        return
+
     supports_cursor = state.supports_cursor
 
     if not supports_cursor:
@@ -844,6 +890,14 @@ def _render_progress_stack_locked(
 
     coordinator_state = _coordinator_state()
     state = backend_state or _current_render_backend_state(columns_hint)
+
+    if state.headless:
+        bars = _active_progress_bars()
+        with _STATE_LOCK:
+            coordinator_state._dirty_progress_bars.difference_update(bars)
+        _record_progress_activity_locked()
+        return
+
     columns = state.columns
     rows = state.lines
 
@@ -1089,6 +1143,9 @@ def _record_progress_activity() -> None:
 def _should_refresh_in_background(state: RenderBackendState, bars: Sequence["ProgressBar"]) -> bool:
     """Return whether the background worker should wake for current bars."""
 
+    if state.headless:
+        return False
+
     if state.supports_cursor or state.notebook:
         return True
 
@@ -1167,6 +1224,12 @@ def _progress_refresh_worker() -> None:
 
 def _ensure_background_refresh_thread() -> None:
     """Start the shared renderer refresh worker exactly once."""
+
+    try:
+        if _current_render_backend_state().headless:
+            return
+    except Exception:
+        pass
 
     with _STATE_LOCK:
         state = _coordinator_state()
@@ -1286,6 +1349,8 @@ class LogBar(logging.Logger):
                 _print("", end='\n', flush=True)
 
         _ensure_background_refresh_thread()
+
+        _log_headless_state_once()
 
         return shared_logger
 

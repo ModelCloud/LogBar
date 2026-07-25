@@ -25,6 +25,7 @@ from .logbar import (
     mark_progress_bar_dirty,
     render_lock,
     render_progress_stack,
+    _log_headless_state_once,
 )
 if TYPE_CHECKING:  # pragma: no cover - type hints without runtime import cycle
     from .logbar import LogBar as LogBarType
@@ -496,6 +497,18 @@ class ProgressBar:
         )
         self._last_output_step: Optional[int] = None
 
+        # Auto-detect headless/AI-agent/notebook/CI environments and suppress
+        # high-frequency redraws so logs do not get polluted with terminal
+        # control sequences in remote or non-interactive shells.
+        _backend_state = render_backend_state(
+            stream=sys.stdout,
+            size_provider=terminal_size,
+            notebook=_running_in_notebook_environment(),
+        )
+        self._headless = _backend_state.headless
+        if self._headless:
+            _log_headless_state_once(_backend_state)
+
         self.ui_show_left_steps = True # show [1 of 100] on left side
         self.ui_show_left_steps_offset = 0
 
@@ -808,6 +821,9 @@ class ProgressBar:
         if self._attached:
             return self
 
+        if self._headless:
+            return self
+
         target_logger = logger or self._owner_logger or LogBar.shared()
         self._attached_logger = target_logger
         self._owner_logger = target_logger
@@ -933,6 +949,9 @@ class ProgressBar:
     @_render_locked
     def draw(self, force: bool = False):
         """Render the current progress state either inline or in the stack."""
+
+        if self._headless:
+            return
 
         # Even skipped draws count as activity. This prevents the background
         # refresher from redrawing the same bar immediately and undoing the
@@ -1208,6 +1227,8 @@ class ProgressBar:
         try:
             state = self._render_backend_state(backend_state)
         except Exception:
+            return False
+        if state.headless:
             return False
         if style_enabled is None:
             style_enabled = state.supports_styling
