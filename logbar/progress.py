@@ -1364,13 +1364,28 @@ class ProgressBar:
 class RollingProgressBar(ProgressBar):
     """Indeterminate progress indicator with a rolling highlight."""
 
-    def __init__(self, owner: Optional["LogBarType"] = None, interval: float = 0.5, tail_length: int = 4):
+    def __init__(
+        self,
+        owner: Optional["LogBarType"] = None,
+        interval: float = 0.5,
+        tail_length: int = 4,
+        output_interval: Optional[int] = None,
+    ):
         """Create an indeterminate spinner-style progress bar."""
 
-        # Spinner animation already has its own wall-clock interval. Keep
-        # output throttling at 1 so the phase animation stays smooth unless a
-        # caller explicitly changes it later.
-        super().__init__(iterable=1, owner=owner, output_interval=1)
+        # Respect the global output-throttle default like determinate bars.
+        # The wall-clock interval still governs how often the spinner advances;
+        # output_interval only controls how many phase steps are skipped between
+        # rendered frames.
+        super().__init__(
+            iterable=1,
+            owner=owner,
+            output_interval=(
+                output_interval
+                if output_interval is not None
+                else _env_progress_output_interval()
+            ),
+        )
         self._interval = max(0.05, float(interval))
         self._tail_length = max(1, int(tail_length))
         self._phase = 0
@@ -1406,6 +1421,8 @@ class RollingProgressBar(ProgressBar):
     def pulse(self) -> "RollingProgressBar":
         """Advance the animation a single frame and redraw immediately."""
 
+        if not _env_animation_enabled():
+            return self
         self._advance_phase()
         self._next_spinner_refresh_at = time.monotonic() + self._interval
         self.draw()
@@ -1429,6 +1446,9 @@ class RollingProgressBar(ProgressBar):
 
         if not self._attached or self.closed:
             self._next_spinner_refresh_at = 0.0
+            return changed
+
+        if not _env_animation_enabled():
             return changed
 
         if self._next_spinner_refresh_at <= 0:

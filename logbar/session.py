@@ -221,6 +221,7 @@ class RegionScreenSession:
         title: str = "",
         interval: float = 0.5,
         tail_length: int = 4,
+        output_interval: Optional[int] = None,
     ):
         """Create and attach a pane-local rolling spinner."""
 
@@ -233,6 +234,7 @@ class RegionScreenSession:
                 region_id=target_region_id,
                 interval=interval,
                 tail_length=tail_length,
+                output_interval=output_interval,
             ).attach()
             if title:
                 bar.title(title)

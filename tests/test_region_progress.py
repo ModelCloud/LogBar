@@ -5,11 +5,13 @@
 
 """Tests for pane-local progress bars rendered through split sessions."""
 
+import os
 import time
 import unittest
 from unittest import mock
 
 from logbar.layout import LeafNode, SplitDirection, SplitNode
+from logbar.progress import _env_animation_enabled, _env_progress_output_interval
 from logbar.session import RegionScreenSession
 from tests._stream_helpers import FakeTTY, MirroredTTY, real_terminal_stream
 
@@ -309,3 +311,59 @@ class TestRegionProgress(unittest.TestCase):
 
             left_spinner.close()
             session.close()
+
+    def test_region_spinner_output_interval_respects_env(self):
+        """Region rolling bars inherit LOGBAR_PROGRESS_OUTPUT_INTERVAL."""
+
+        cache_clear = _env_progress_output_interval.cache_clear
+        try:
+            with mock.patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10"}), \
+                 mock.patch("logbar.progress.terminal_size", return_value=(80, 24)):
+                cache_clear()
+                session = RegionScreenSession(
+                    layout_root=SplitNode(
+                        direction=SplitDirection.LEFT_RIGHT,
+                        children=(LeafNode("left"),),
+                    ),
+                    stream=FakeTTY(),
+                    size_provider=lambda: (80, 4),
+                    use_alternate_screen=False,
+                    auto_render=False,
+                )
+                spinner = session.spinner(region_id="left", title="region-throttled")
+                try:
+                    self.assertEqual(spinner._output_interval, 10)
+                finally:
+                    spinner.close()
+                    session.close()
+        finally:
+            cache_clear()
+
+    def test_region_spinner_animation_disabled_by_logbar_animation_env(self):
+        """LOGBAR_ANIMATION=0 freezes region spinner phase updates."""
+
+        anim_cache_clear = _env_animation_enabled.cache_clear
+        try:
+            with mock.patch.dict(os.environ, {"LOGBAR_ANIMATION": "0"}), \
+                 mock.patch("logbar.progress.terminal_size", return_value=(80, 24)):
+                anim_cache_clear()
+                session = RegionScreenSession(
+                    layout_root=SplitNode(
+                        direction=SplitDirection.LEFT_RIGHT,
+                        children=(LeafNode("left"),),
+                    ),
+                    stream=FakeTTY(),
+                    size_provider=lambda: (80, 4),
+                    use_alternate_screen=False,
+                    auto_render=False,
+                )
+                spinner = session.spinner(region_id="left", title="frozen", interval=10.0)
+                try:
+                    initial_phase = spinner._phase
+                    spinner._tick_background_refresh(spinner._next_spinner_refresh_at + 1.0)
+                    self.assertEqual(spinner._phase, initial_phase)
+                finally:
+                    spinner.close()
+                    session.close()
+        finally:
+            anim_cache_clear()

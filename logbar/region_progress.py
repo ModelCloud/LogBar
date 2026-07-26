@@ -112,10 +112,16 @@ class RegionRollingProgressBar(_SessionBoundProgressMixin, RollingProgressBar):
         region_id: str,
         interval: float = 0.5,
         tail_length: int = 4,
+        output_interval: Optional[int] = None,
     ) -> None:
         """Bind one rolling spinner to a split-pane session region."""
 
-        super().__init__(owner=None, interval=interval, tail_length=tail_length)
+        super().__init__(
+            owner=None,
+            interval=interval,
+            tail_length=tail_length,
+            output_interval=output_interval,
+        )
         self._bind_session(session, region_id)
 
     def _on_session_attach(self) -> None:

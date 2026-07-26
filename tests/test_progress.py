@@ -282,6 +282,70 @@ class TestProgress(unittest.TestCase):
 
         cache_clear()
 
+    def test_spinner_output_interval_respects_env(self):
+        """Rolling progress bars inherit LOGBAR_PROGRESS_OUTPUT_INTERVAL."""
+
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10"}):
+            cache_clear()
+            pb = log.spinner(title="throttled")
+            try:
+                self.assertEqual(pb._output_interval, 10)
+            finally:
+                with redirect_stdout(StringIO()):
+                    pb.close()
+
+        cache_clear()
+
+    def test_spinner_output_interval_explicit_overrides_env(self):
+        """An explicit output_interval keyword overrides the env default."""
+
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10"}):
+            cache_clear()
+            pb = log.spinner(title="explicit", output_interval=5)
+            try:
+                self.assertEqual(pb._output_interval, 5)
+            finally:
+                with redirect_stdout(StringIO()):
+                    pb.close()
+
+        cache_clear()
+
+    def test_spinner_animation_disabled_by_logbar_animation_env(self):
+        """LOGBAR_ANIMATION=0 freezes automatic spinner phase updates."""
+
+        script = (
+            "from logbar import LogBar\n"
+            "log = LogBar.shared(override_logger=True)\n"
+            "spinner = log.spinner(title='frozen', interval=10.0)\n"
+            "spinner._tick_background_refresh(spinner._next_spinner_refresh_at + 1.0)\n"
+            "print('phase', spinner._phase)\n"
+            "spinner.close()\n"
+        )
+
+        enabled = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            env={},
+            check=True,
+        )
+        self.assertIn("phase 1", enabled.stdout)
+
+        disabled = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            env={"LOGBAR_ANIMATION": "0"},
+            check=True,
+        )
+        self.assertIn("phase 0", disabled.stdout)
+
     def test_progress_output_interval_skips_intermediate_draws_but_flushes_final_step(self):
         """Skip intermediate frames while still forcing the final 100% snapshot."""
 
