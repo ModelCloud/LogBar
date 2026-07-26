@@ -24,9 +24,9 @@
 - Sub-cell Unicode bar rasterization for smoother, more accurate terminal fills.
 - Built-in styling for progress bar fills, colors, gradients, and head glyphs.
 - Animated progress titles with a subtle sweeping highlight.
-  Set `LOGBAR_ANIMATION=0` to disable the highlight animation.
+  Set `LOGBAR_ANIMATION=0` to disable the highlight animation (applies to stacked, region, and spinner bars).
 - Progress output throttling for reducing redraw churn in batch-heavy jobs.
-  Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to render every 10 logical updates instead of every update.
+  Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to render every 10 logical updates instead of every update (applies to all progress bar types including spinners and split-pane region bars).
 - Column-aware table printer with spans, width hints, and `fit` sizing.
 - Zero dependencies; works anywhere Python runs.
 
@@ -179,7 +179,7 @@ for _ in log.pb(500, output_interval=10).title("Quantizing"):
     time.sleep(0.01)
 ```
 
-`output_interval=10` means LogBar will emit a fresh snapshot after roughly every 10 logical progress steps, while still forcing the last pending step to render before the bar closes. Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to apply the same default process-wide.
+`output_interval=10` means LogBar will emit a fresh snapshot after roughly every 10 logical progress steps, while still forcing the last pending step to render before the bar closes. Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to apply the same default process-wide. This default is now honored by stacked progress bars, pane-local region bars, and rolling spinners.
 
 Manual mode gives full control when you need to interleave logging and redraws:
 
@@ -211,7 +211,7 @@ with log.spinner("Loading model") as spinner:
     warm_up()
 ```
 
-The rolling bar animates automatically while attached. Close it explicitly with `spinner.close()` if you are not using the context manager. Set `LOGBAR_ANIMATION=0` to disable the title highlight sweep on progress labels.
+The rolling bar animates automatically while attached. Close it explicitly with `spinner.close()` if you are not using the context manager. Set `LOGBAR_ANIMATION=0` to disable the title highlight sweep on progress labels. You can also set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to throttle the spinner's phase updates, which is helpful when many spinners are running in headless or CI environments.
 
 ### Multiple Progress Bars
 
@@ -380,7 +380,7 @@ with log.pb(items).manual() as pb:
 - Deduplicated level methods: `debug.once`, `info.once`, `warn.once`, `error.once`, `critical.once`.
 - `setLevel(level)` accepts strings like `"INFO"`, `"WARN"`, `"CRIT"`, numeric levels, numeric strings, and constants such as `LogBar.WARNING`.
 - `pb(iterable_or_total, output_interval=None)` creates and attaches a progress bar.
-- `spinner(title="", interval=0.5, tail_length=4)` creates and attaches an indeterminate rolling progress bar.
+- `spinner(title="", output_interval=None, interval=0.5, tail_length=4)` creates and attaches an indeterminate rolling progress bar.
 - `columns(..., cols=None, width=None, padding=2)` creates a column printer.
 
 ## `ProgressBar`
