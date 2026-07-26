@@ -67,6 +67,10 @@ def _render_locked(method):
 
     @wraps(method)
     def wrapper(self, *args, **kwargs):
+        # In headless/CI mode this progress bar does not produce visual output,
+        # so the render lock is unnecessary for progress-bar API calls.
+        if getattr(self, "_headless", False):
+            return method(self, *args, **kwargs)
         context, _ = self._render_lock_context()
         with context:
             return method(self, *args, **kwargs)
@@ -678,8 +682,16 @@ class ProgressBar:
     def title(self, title: str):
         """Set the title shown before the bar and update width tracking."""
 
+        if title == self._title:
+            return self
+
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Title should not be updated after iteration has started unless in `manual` render mode.")
+
+        if self._headless:
+            self._title = title
+            self._title_plain = title
+            return self
 
         title_len = visible_length(title)
         if title_len > self.max_title_len:
@@ -701,8 +713,16 @@ class ProgressBar:
     def subtitle(self, subtitle: str):
         """Set the subtitle shown between the title and the bar."""
 
+        if subtitle == self._subtitle:
+            return self
+
         if self._iterating and self._render_mode != RenderMode.MANUAL:
             logger.warn("ProgressBar: Sub-title should not be updated after iteration has started unless in `manual` render mode.")
+
+        if self._headless:
+            self._subtitle = subtitle
+            self._subtitle_plain = subtitle
+            return self
 
         subtitle_len = visible_length(subtitle)
         if subtitle_len > self.max_subtitle_len:

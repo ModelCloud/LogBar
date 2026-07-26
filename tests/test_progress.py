@@ -20,6 +20,7 @@ from logbar import LogBar
 from logbar import progress as progress_module
 from logbar.progress import ProgressBar, TITLE_HIGHLIGHT_COLOR, ANSI_BOLD_RESET
 from logbar.logbar import _active_progress_bars
+from logbar.terminal import RenderBackendState
 
 log = LogBar.shared(override_logger=True)
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -181,7 +182,7 @@ class TestProgress(unittest.TestCase):
 
         pb = log.pb(100).title("[TITLE: FIXED]").manual()
         for _ in pb:
-            pb.subtitle(f"[SUBTITLE: FIXED]").draw()
+            pb.subtitle("[SUBTITLE: FIXED]").draw()
             sleep(0.1)
 
     def test_title_animation_skips_ansi_sequences(self):
@@ -783,3 +784,50 @@ class TestProgress(unittest.TestCase):
                 pb.close()
 
         cache_clear()
+
+
+class TestProgressDiffAndHeadlessOptimization(unittest.TestCase):
+    """Verify title/subtitle diff detection and headless short-circuiting."""
+
+    def test_title_and_subtitle_skip_expensive_work_when_unchanged(self):
+        """Calling title/subtitle with an identical value should be a no-op."""
+
+        pb = LogBar.shared().pb(range(10)).manual().set(show_left_steps=False)
+        try:
+            pb.title("same")
+            pb.subtitle("same")
+            with patch.object(progress_module, "visible_length") as mock_visible_length:
+                pb.title("same")
+                pb.subtitle("same")
+                mock_visible_length.assert_not_called()
+        finally:
+            pb.close()
+
+    def test_headless_title_subtitle_and_draw_are_cheap(self):
+        """Headless mode should not call visible_length for title/subtitle/draw."""
+
+        headless_state = RenderBackendState(
+            columns=80,
+            lines=24,
+            is_tty=False,
+            notebook=False,
+            supports_cursor=False,
+            supports_ansi=False,
+            supports_styling=False,
+            headless=True,
+        )
+        with patch.object(progress_module, "render_backend_state", return_value=headless_state):
+            with patch.object(progress_module, "visible_length") as mock_visible_length:
+                pb = LogBar.shared().pb(range(10)).manual().set(show_left_steps=False)
+                try:
+                    pb.title("title")
+                    pb.subtitle("subtitle")
+                    pb.current_iter_step = 5
+                    pb.draw()
+                    mock_visible_length.assert_not_called()
+                    self.assertEqual(pb._title, "title")
+                    self.assertEqual(pb._subtitle, "subtitle")
+                    self.assertEqual(pb.max_title_len, 0)
+                    self.assertEqual(pb.max_subtitle_len, 0)
+                finally:
+                    pb.close()
