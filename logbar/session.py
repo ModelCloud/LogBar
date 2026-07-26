@@ -120,6 +120,7 @@ class RegionScreenSession:
             use_alternate_screen=use_alternate_screen,
         )
         self._auto_render = bool(auto_render)
+        self._closed = False
         self._background_refresh_enabled = (
             self._auto_render if background_refresh is None else (bool(background_refresh) and self._auto_render)
         )
@@ -219,6 +220,7 @@ class RegionScreenSession:
         *,
         region_id: Optional[str] = None,
         title: str = "",
+        output_interval: Optional[int] = None,
         interval: float = 0.5,
         tail_length: int = 4,
     ):
@@ -231,6 +233,7 @@ class RegionScreenSession:
             bar = RegionRollingProgressBar(
                 session=self,
                 region_id=target_region_id,
+                output_interval=output_interval,
                 interval=interval,
                 tail_length=tail_length,
             ).attach()
@@ -244,16 +247,32 @@ class RegionScreenSession:
         with _RENDER_LOCK:
             state, size_changed, _ = self._resolve_render_snapshot()
             now = time.monotonic()
-            changed = size_changed or force
+            force_refresh = size_changed or force
+            precomputed: dict[object, str] = {}
 
             for pane in self._pane_states.values():
                 for pb in list(pane.progress_bars):
                     tick = getattr(pb, "_tick_background_refresh", None)
-                    if callable(tick) and tick(now):
-                        changed = True
+                    if not callable(tick) or not tick(now):
+                        continue
 
-            if changed:
-                return self.render(backend_state=state, force_progress_refresh=True)
+                    width = self._progress_width(pb.region_id, state)
+                    rendered = pb._resolve_rendered_line(
+                        width,
+                        force=False,
+                        allow_repeat=True,
+                        backend_state=state,
+                        style_enabled=state.supports_styling,
+                    )
+                    if rendered is not None:
+                        precomputed[pb] = rendered
+
+            if force_refresh or precomputed:
+                return self.render(
+                    backend_state=state,
+                    force_progress_refresh=force_refresh,
+                    precomputed=precomputed or None,
+                )
 
             return self._screen.compose_lines(backend_state=state)
 
@@ -262,15 +281,19 @@ class RegionScreenSession:
         *,
         backend_state=None,
         force_progress_refresh: bool = False,
+        precomputed: Optional[dict[object, str]] = None,
     ) -> list[str]:
         """Render the current layout frame through the bound screen backend."""
 
         with _RENDER_LOCK:
+            if self._closed:
+                return []
             state, size_changed, viewports = self._resolve_render_snapshot(backend_state)
             self._sync_all_pane_footers(
                 backend_state=state,
                 force=force_progress_refresh or size_changed,
                 allow_repeat=True,
+                precomputed=precomputed,
                 viewports=viewports,
             )
             lines = self._screen.render(backend_state=state)
@@ -282,6 +305,7 @@ class RegionScreenSession:
 
         self.stop_background_refresh()
         with _RENDER_LOCK:
+            self._closed = True
             self._screen.close()
             self._last_render_size = None
 
@@ -458,7 +482,7 @@ class RegionScreenSession:
                 continue
 
             active_bars.append(pb)
-            bar_force = force or pb in self._dirty_progress_bars
+            bar_force = force
             rendered = precomputed.get(pb) if precomputed is not None else None
             if rendered is None:
                 rendered = pb._resolve_rendered_line(
@@ -483,6 +507,7 @@ class RegionScreenSession:
         backend_state,
         force: bool = False,
         allow_repeat: bool = True,
+        precomputed: Optional[dict[object, str]] = None,
         viewports: Optional[dict[str, object]] = None,
     ) -> None:
         """Recompose every pane footer that currently has progress rows."""
@@ -497,6 +522,7 @@ class RegionScreenSession:
                     backend_state=backend_state,
                     force=force,
                     allow_repeat=allow_repeat,
+                    precomputed=precomputed,
                     viewports=resolved_viewports,
                 )
 
@@ -561,12 +587,12 @@ class RegionScreenSession:
             self._sync_pane_footer(
                 region_id,
                 backend_state=state,
-                force=True,
+                force=False,
                 allow_repeat=True,
                 viewports=viewports,
             )
-            if self._auto_render:
-                self.render(backend_state=state, force_progress_refresh=True)
+            if self._auto_render and not self._closed:
+                self.render(backend_state=state, force_progress_refresh=False)
             has_active_progress_bars = self._has_active_progress_bars()
 
         if attached:
@@ -594,11 +620,12 @@ class RegionScreenSession:
                 self._sync_pane_footer(
                     region_id,
                     backend_state=state,
-                    force=True,
+                    force=False,
                     allow_repeat=True,
                     viewports=viewports,
                 )
-                self.render(backend_state=state, force_progress_refresh=True)
+                if not self._closed:
+                    self.render(backend_state=state, force_progress_refresh=False)
 
     def _draw_progress_bar(self, region_id: str, pb: object, *, force: bool = False) -> None:
         """Resolve one pane-local progress bar and optionally repaint the screen."""
@@ -627,7 +654,7 @@ class RegionScreenSession:
                 viewports=viewports,
             )
             self._dirty_progress_bars.discard(pb)
-            if self._auto_render:
+            if self._auto_render and not self._closed:
                 self.render(backend_state=state, force_progress_refresh=size_changed)
 
     def _resolve_backend_state(self, backend_state=None):

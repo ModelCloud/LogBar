@@ -1364,16 +1364,30 @@ class ProgressBar:
 class RollingProgressBar(ProgressBar):
     """Indeterminate progress indicator with a rolling highlight."""
 
-    def __init__(self, owner: Optional["LogBarType"] = None, interval: float = 0.5, tail_length: int = 4):
+    def __init__(
+        self,
+        owner: Optional["LogBarType"] = None,
+        *,
+        output_interval: Optional[int] = None,
+        interval: float = 0.5,
+        tail_length: int = 4,
+    ):
         """Create an indeterminate spinner-style progress bar."""
 
-        # Spinner animation already has its own wall-clock interval. Keep
-        # output throttling at 1 so the phase animation stays smooth unless a
-        # caller explicitly changes it later.
-        super().__init__(iterable=1, owner=owner, output_interval=1)
+        # Honor the global output interval default so callers can throttle
+        # spinner redraws with LOGBAR_PROGRESS_OUTPUT_INTERVAL, while still
+        # defaulting to one frame per tick for smooth local animation.
+        super().__init__(
+            iterable=1,
+            owner=owner,
+            output_interval=(
+                _env_progress_output_interval() if output_interval is None else output_interval
+            ),
+        )
         self._interval = max(0.05, float(interval))
         self._tail_length = max(1, int(tail_length))
         self._phase = 0
+        self._pending_spinner_steps = 0
         self.ui_show_left_steps = False
         self._next_spinner_refresh_at = 0.0
 
@@ -1439,9 +1453,19 @@ class RollingProgressBar(ProgressBar):
             return changed
 
         steps = max(1, int((now - self._next_spinner_refresh_at) // self._interval) + 1)
-        self._advance_phase(steps=steps)
-        self._next_spinner_refresh_at += self._interval * steps
-        return True
+        # Reset the wall-clock deadline immediately so missed ticks don't pile up.
+        self._next_spinner_refresh_at = now + self._interval
+
+        # Throttle the spinner's phase advances with the same output interval used
+        # for determinate bars (default from LOGBAR_PROGRESS_OUTPUT_INTERVAL).
+        self._pending_spinner_steps += steps
+        if self._pending_spinner_steps >= self._output_interval:
+            advance = self._pending_spinner_steps
+            self._pending_spinner_steps = 0
+            self._advance_phase(steps=advance)
+            return True
+
+        return changed
 
     @_render_locked
     def _advance_phase(self, steps: int = 1) -> None:

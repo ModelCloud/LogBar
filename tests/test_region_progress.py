@@ -5,10 +5,13 @@
 
 """Tests for pane-local progress bars rendered through split sessions."""
 
+import os
+import re
 import time
 import unittest
 from unittest import mock
 
+from logbar import progress as progress_module
 from logbar.layout import LeafNode, SplitDirection, SplitNode
 from logbar.session import RegionScreenSession
 from tests._stream_helpers import FakeTTY, MirroredTTY, real_terminal_stream
@@ -309,3 +312,70 @@ class TestRegionProgress(unittest.TestCase):
 
             left_spinner.close()
             session.close()
+
+    def test_region_progress_output_interval_respects_env_with_dynamic_titles(self):
+        """Pane-local bars throttle dynamic title changes with LOGBAR_PROGRESS_OUTPUT_INTERVAL."""
+
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with mock.patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10", "NO_COLOR": "1"}), \
+             mock.patch("logbar.progress.terminal_size", return_value=(120, 8)), \
+             mock.patch("logbar.logbar.terminal_size", return_value=(120, 8)):
+            cache_clear()
+            stream = FakeTTY()
+            session = RegionScreenSession.columns(
+                "left", "right",
+                weights=(1, 1),
+                stream=stream,
+                size_provider=lambda: (120, 8),
+                use_alternate_screen=False,
+                auto_render=True,
+            )
+            left = session.pb(30, region_id="left").manual()
+            for i in range(1, 31):
+                left.current_iter_step = i
+                left.title(f"L {i}").draw()
+            session.render()
+            session.close()
+
+            cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", stream.getvalue())
+            titles = re.findall(r"L \d+", cleaned)
+            # With output_interval=10 we expect one of L 10, L 20, L 30, not all 30.
+            self.assertLess(len(set(titles)), 30)
+            self.assertTrue(any("L 10" in title for title in titles))
+            self.assertTrue(any("L 30" in title for title in titles))
+
+        cache_clear()
+
+    def test_region_spinner_output_interval_respects_env(self):
+        """Pane-local rolling bars honor LOGBAR_PROGRESS_OUTPUT_INTERVAL for phase ticks."""
+
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with mock.patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10", "NO_COLOR": "1"}), \
+             mock.patch("logbar.progress.terminal_size", return_value=(80, 12)), \
+             mock.patch("logbar.logbar.terminal_size", return_value=(80, 12)):
+            cache_clear()
+            stream = FakeTTY()
+            session = RegionScreenSession.columns(
+                "left",
+                weights=(1,),
+                stream=stream,
+                size_provider=lambda: (80, 12),
+                use_alternate_screen=False,
+                auto_render=True,
+            )
+            spinner = session.spinner(region_id="left", title="S", interval=10.0)
+            for _ in range(25):
+                spinner.pulse()
+            session.render()
+            session.close()
+
+            self.assertEqual(spinner._output_interval, 10)
+            cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", stream.getvalue())
+            # Each rendered frame starts with the title followed by the bar.
+            frames = cleaned.count("S ")
+            self.assertGreaterEqual(frames, 2)
+            self.assertLess(frames, 25)
+
+        cache_clear()
