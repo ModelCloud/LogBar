@@ -369,6 +369,16 @@ with log.pb(items).manual() as pb:
 - Combine columns and progress bars by logging summaries at key checkpoints.
 - Use `log.warn.once(...)` to keep noisy health checks readable.
 - For multi-line messages, pre-format text and pass it as a single string; LogBar keeps borders intact.
+- In headless, notebook, or CI environments, LogBar auto-disables high-frequency progress output. Set `LOGBAR_FORCE_PROGRESS=1` to render anyway, or `LOGBAR_DISABLE_HEADLESS_DETECTION=1` to disable the heuristic.
+
+# Environment Variables
+
+- `LOGBAR_ANIMATION` — Set to `0`/`false`/`off` to disable the title highlight sweep.
+- `LOGBAR_PROGRESS_OUTPUT_INTERVAL` — Default logical step interval between progress renders (default `1`). Applies to stacked bars, region panes, and rolling spinners.
+- `LOGBAR_FORCE_PROGRESS=1` — Force progress rendering in headless/AI-agent/notebook/CI shells.
+- `LOGBAR_DISABLE_HEADLESS_DETECTION=1` — Disable headless/notebook/CI auto-detection.
+- `NO_COLOR=1` or `ANSI_COLORS_DISABLED=1` — Disable ANSI colors.
+- `COLUMNS` / `LINES` — Override the detected terminal size.
 
 # API Reference
 
