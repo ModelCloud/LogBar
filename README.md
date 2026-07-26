@@ -27,6 +27,7 @@
   Set `LOGBAR_ANIMATION=0` to disable the highlight animation (applies to stacked, region, and spinner bars).
 - Progress output throttling for reducing redraw churn in batch-heavy jobs.
   Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to render every 10 logical updates instead of every update (applies to all progress bar types including spinners and split-pane region bars).
+- Headless/CI/AI-agent fast path: title, subtitle, and draw calls skip expensive width/padding math and the shared render lock when no interactive terminal is present.
 - Column-aware table printer with spans, width hints, and `fit` sizing.
 - Zero dependencies; works anywhere Python runs.
 
@@ -180,6 +181,8 @@ for _ in log.pb(500, output_interval=10).title("Quantizing"):
 ```
 
 `output_interval=10` means LogBar will emit a fresh snapshot after roughly every 10 logical progress steps, while still forcing the last pending step to render before the bar closes. Set `LOGBAR_PROGRESS_OUTPUT_INTERVAL=10` to apply the same default process-wide. This default is now honored by stacked progress bars, pane-local region bars, and rolling spinners.
+
+When LogBar detects a headless/CI/AI-agent environment (e.g. `CI`, `DEVIN_*`, `CODEX_*`, Jupyter, or `TERM=dumb`), it suppresses visual progress-bar output and short-circuits the title/subtitle/draw pipeline. This makes frequent progress updates in long batch loops cheap without flooding logs.
 
 Manual mode gives full control when you need to interleave logging and redraws:
 
