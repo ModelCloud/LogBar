@@ -1362,12 +1362,24 @@ class LogBar(logging.Logger):
 
         return ProgressBar(iterable, owner=self, output_interval=output_interval).attach(self)
 
-    def spinner(self, title: str = "", *, interval: float = 0.5, tail_length: int = 4):
+    def spinner(
+        self,
+        title: str = "",
+        *,
+        output_interval: Optional[int] = None,
+        interval: float = 0.5,
+        tail_length: int = 4,
+    ):
         """Create and attach an indeterminate rolling spinner."""
 
         from logbar.progress import RollingProgressBar
 
-        bar = RollingProgressBar(owner=self, interval=interval, tail_length=tail_length)
+        bar = RollingProgressBar(
+            owner=self,
+            output_interval=output_interval,
+            interval=interval,
+            tail_length=tail_length,
+        )
         if title:
             bar.title(title)
         return bar.attach(self)

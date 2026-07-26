@@ -741,3 +741,45 @@ class TestProgress(unittest.TestCase):
         self.assertGreaterEqual(after_phase - initial_phase, pulses)
         self.assertGreaterEqual(pulse_duration, 5.0)
         self.assertIn('Pulse', last_line)
+
+    def test_spinner_output_interval_respects_env(self):
+        """Rolling bars inherit LOGBAR_PROGRESS_OUTPUT_INTERVAL for throttling."""
+
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10"}):
+            cache_clear()
+
+            class FakeTTY(StringIO):
+                def isatty(self):
+                    return True
+
+            with redirect_stdout(FakeTTY()):
+                pb = log.spinner(title="S", interval=10.0)
+                try:
+                    for _ in range(25):
+                        pb.pulse()
+                finally:
+                    pb.close()
+
+            self.assertEqual(pb._output_interval, 10)
+            self.assertGreater(pb._phase, 0)
+
+        cache_clear()
+
+    def test_rolling_progress_bar_output_interval_defaults_from_env(self):
+        """RollingProgressBar reads the global output interval env default."""
+
+        cache_clear = progress_module._env_progress_output_interval.cache_clear
+
+        with patch.dict(os.environ, {"LOGBAR_PROGRESS_OUTPUT_INTERVAL": "10"}):
+            cache_clear()
+            from logbar.progress import RollingProgressBar
+
+            pb = RollingProgressBar(interval=10.0)
+            try:
+                self.assertEqual(pb._output_interval, 10)
+            finally:
+                pb.close()
+
+        cache_clear()

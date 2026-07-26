@@ -51,6 +51,9 @@ class _SessionBoundProgressMixin:
 
         del logger
 
+        if getattr(self, "_headless", False):
+            return self
+
         with _RENDER_LOCK:
             if self.closed or self._attached:
                 return self
@@ -81,6 +84,9 @@ class _SessionBoundProgressMixin:
     def draw(self, force: bool = False):
         """Resolve and optionally paint the pane-local progress footer."""
 
+        if getattr(self, "_headless", False):
+            return
+
         with _RENDER_LOCK:
             self._session._draw_progress_bar(self._region_id, self, force=force)
 
@@ -110,12 +116,18 @@ class RegionRollingProgressBar(_SessionBoundProgressMixin, RollingProgressBar):
         *,
         session: "RegionScreenSession",
         region_id: str,
+        output_interval: Optional[int] = None,
         interval: float = 0.5,
         tail_length: int = 4,
     ) -> None:
         """Bind one rolling spinner to a split-pane session region."""
 
-        super().__init__(owner=None, interval=interval, tail_length=tail_length)
+        super().__init__(
+            owner=None,
+            output_interval=output_interval,
+            interval=interval,
+            tail_length=tail_length,
+        )
         self._bind_session(session, region_id)
 
     def _on_session_attach(self) -> None:
