@@ -528,7 +528,16 @@ def _clear_progress_stack_locked(
     state = backend_state or _current_render_backend_state()
 
     if count == 0:
-        _set_cursor_visibility_locked(True, backend_state=state)
+        coordinator_state._last_drawn_progress_count = 0
+        coordinator_state._last_rendered_terminal_size = None
+        coordinator_state._last_rendered_progress_lines = []
+        coordinator_state._cursor_positioned_above_stack = False
+        coordinator_state._cursor_positioned_on_stack_top = False
+        coordinator_state._stack_redraw_invalidated = False
+        if show_cursor:
+            _set_cursor_visibility_locked(True, backend_state=state)
+        if flush_deferred_logs and not for_log_output:
+            _flush_deferred_logs_locked()
         return
 
     if state.headless:

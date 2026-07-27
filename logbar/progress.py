@@ -261,8 +261,8 @@ class ProgressStyle:
         if palette and fill_end > 0:
             fill_plain = plain[:fill_end]
             palette_len = len(palette)
-            if self.gradient and palette_len > 1 and fill_end > 1:
-                scale_n = fill_end - 1
+            if self.gradient and palette_len > 1 and occupied_cells > 1:
+                scale_n = occupied_cells - 1
                 scale_d = palette_len - 1
                 start = 0
                 p = 0
