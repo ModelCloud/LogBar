@@ -161,7 +161,7 @@ def _is_stream_tty(stream: Optional[object]) -> bool:
 def _env_flag_enabled(name: str) -> bool:
     """Return True when ``name`` is set to a non-empty, non-disabling value."""
 
-    value = str(os.environ.get(name, "")).strip().lower()
+    value = os.environ.get(name, "").strip().lower()
     return value not in {"", "0", "false", "off", "no"}
 
 
@@ -189,10 +189,12 @@ def _is_headless_environment(*, notebook: bool = False) -> bool:
     disable this heuristic with ``LOGBAR_DISABLE_HEADLESS_DETECTION=1``.
     """
 
-    if _env_flag_enabled("LOGBAR_FORCE_PROGRESS"):
+    env = os.environ
+
+    if env.get("LOGBAR_FORCE_PROGRESS", "").strip().lower() not in {"", "0", "false", "off", "no"}:
         return False
 
-    if _env_flag_enabled("LOGBAR_DISABLE_HEADLESS_DETECTION"):
+    if env.get("LOGBAR_DISABLE_HEADLESS_DETECTION", "").strip().lower() not in {"", "0", "false", "off", "no"}:
         return False
 
     # Do not disable the UI while the test suite is driving it.
@@ -202,13 +204,13 @@ def _is_headless_environment(*, notebook: bool = False) -> bool:
     if notebook:
         return True
 
-    if any(name in os.environ for name in _HEADLESS_ENV_VARS):
+    if any(name in env for name in _HEADLESS_ENV_VARS):
         return True
 
-    if any(key.startswith(_HEADLESS_ENV_PREFIXES) for key in os.environ):
+    if any(key.startswith(_HEADLESS_ENV_PREFIXES) for key in env):
         return True
 
-    if os.environ.get("TERM", "").strip().lower() == "dumb":
+    if env.get("TERM", "").strip().lower() == "dumb":
         return True
 
     return False
@@ -229,14 +231,20 @@ def render_backend_state(
 
     is_tty = _is_stream_tty(target)
 
-    term_value = str(os.environ.get("TERM", "")).strip().lower()
-    force_cursor_value = os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "")
+    env = os.environ
+    term_value = env.get("TERM", "").strip().lower()
+    force_cursor_value = env.get("LOGBAR_FORCE_TERMINAL_CURSOR", "")
     force_cursor = bool(force_cursor_value.strip())
+
+    _disabled_values = {"", "0", "false", "off", "no"}
     force_ansi = any(
-        _env_flag_enabled(name)
+        env.get(name, "").strip().lower() not in _disabled_values
         for name in ("LOGBAR_FORCE_ANSI", "CLICOLOR_FORCE", "FORCE_COLOR")
     )
-    disable_styling = "NO_COLOR" in os.environ or _env_flag_enabled("ANSI_COLORS_DISABLED")
+    disable_styling = (
+        "NO_COLOR" in env
+        or env.get("ANSI_COLORS_DISABLED", "").strip().lower() not in _disabled_values
+    )
     raw_ansi_blocked = term_value == "dumb" and not force_ansi
 
     supports_cursor = is_tty or force_cursor

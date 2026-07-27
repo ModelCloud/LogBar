@@ -108,9 +108,9 @@ class RenderCoordinatorState:
         if name == "_on_change":
             return
 
-        callback = getattr(self, "_on_change", None)
-        if callable(callback):
-            callback(name, value)
+        on_change = self._on_change
+        if on_change is not None:
+            on_change(name, value)
 
     def field_names(self) -> Sequence[str]:
         """Return the mutable state field names tracked by the coordinator."""
