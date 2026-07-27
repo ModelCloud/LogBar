@@ -12,6 +12,8 @@ from unittest import mock
 
 import pytest
 from logbar import LogBar
+from logbar.columns import _fit_visible
+from logbar.drawing import visible_length
 
 log = LogBar.shared()
 
@@ -301,3 +303,53 @@ def test_columns_ignore_ansi_sequences():
     assert row_lines
     assert any('FAIL' in line for line in row_lines)
     assert any('READY' in line for line in row_lines)
+
+
+def test_columns_fit_visible_exact_width_for_wide_chars():
+    """Truncated cells with double-width characters must still match the target width."""
+
+    text = "\u4e2d\u6587\u6d4b\u8bd5"  # four CJK chars, visible width 8
+    assert visible_length(_fit_visible(text, 3)) == 3
+    assert visible_length(_fit_visible(text, 4)) == 4
+    assert visible_length(_fit_visible(text, 5)) == 5
+    assert visible_length(_fit_visible(text, 6)) == 6
+    assert _fit_visible(text, 8) == text
+    assert visible_length(_fit_visible(text, 10)) == 10
+
+
+def test_columns_clamp_wide_rows_to_terminal_width():
+    """Do not let table rows exceed the terminal width even with very wide values."""
+
+    columns = 80
+    with mock.patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
+        cols = log.columns(
+            "method", "layer", "name", "shape", "size", "loss", "samples",
+            "damp", "avg_loss", "time", "memory", "params", "module",
+            "bits", "group_size", "desc_act", "static"
+        )
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            cols.info.header()
+            cols.info(
+                "gptq", "2", "self_attn.k_proj", "3072, 1024", "bf16: 6.8MB",
+                "0.0000000399", "198077", "0.05000", "0.094", "0.372",
+                "cuda 78.45G, 4.4G, 1.84G, 5.39G, 1.72G, 1.68G, 1.68G, 1.77G",
+                "{'bits': 4, 'group_size': 32}",
+                "model.layers.2.self_attn.k_proj", "4", "32", "True", "False"
+            )
+
+    cleaned = _clean(buffer.getvalue())
+    lines = [line for line in cleaned.splitlines() if line.strip()]
+    assert lines
+
+    for line in lines:
+        assert len(line) <= columns, f"line exceeds terminal width: {line!r}"
+
+    # The rendered table content (after the log prefix) should fit the budget.
+    table_lines = [line for line in lines if '|' in line]
+    assert table_lines
+    for line in table_lines:
+        prefix_end = line.find('|')
+        assert prefix_end >= 0
+        assert len(line[prefix_end:]) <= (columns - prefix_end)

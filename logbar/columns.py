@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
+from .drawing import iter_display_atoms as _iter_display_atoms
 from .drawing import strip_ansi as _strip_ansi
 from .drawing import visible_length as _visible_length
 from .terminal import terminal_size
@@ -22,6 +23,46 @@ def _pad_visible(text: str, target: int) -> str:
     if current >= target:
         return text
     return f"{text}{' ' * (target - current)}"
+
+
+def _fit_visible(text: str, target: int, placeholder: str = "...") -> str:
+    """Pad or truncate `text` so its rendered width is exactly `target`."""
+
+    if target <= 0:
+        return ""
+
+    current = _visible_length(text)
+    if current < target:
+        return f"{text}{' ' * (target - current)}"
+    if current == target:
+        return text
+
+    result: List[str] = []
+    width = 0
+    ph_width = _visible_length(placeholder)
+    budget = target - ph_width if target >= ph_width else target
+
+    for is_ansi, token, token_width in _iter_display_atoms(text):
+        if is_ansi:
+            result.append(token)
+            continue
+        if width + token_width > budget:
+            break
+        result.append(token)
+        width += token_width
+
+    if target >= ph_width:
+        result.append(placeholder)
+        width += ph_width
+
+    # Stop any active ANSI style from bleeding into trailing padding.
+    if "\x1b" in text:
+        result.append("\033[0m")
+
+    if width < target:
+        result.append(" " * (target - width))
+
+    return "".join(result)
 
 
 def _columns_locked(method):
@@ -109,6 +150,8 @@ class ColumnsPrinter:
         self._terminal_size = terminal_size_provider or terminal_size
         self._level_proxies: Dict[Any, ColumnsPrinter._LevelProxy] = {}
         self._lock = threading.RLock()
+        self._slot_min_widths: List[int] = []
+        self._fixed_slots: set = set()
 
         if headers:
             self._set_columns(headers)
@@ -321,6 +364,13 @@ class ColumnsPrinter:
         elif len(self._slot_padding) > slot_count:
             self._slot_padding = self._slot_padding[:slot_count]
 
+        if len(self._slot_min_widths) < slot_count:
+            self._slot_min_widths.extend([1] * (slot_count - len(self._slot_min_widths)))
+        elif len(self._slot_min_widths) > slot_count:
+            self._slot_min_widths = self._slot_min_widths[:slot_count]
+
+        self._fixed_slots = set()
+
     def _parse_width_hint(self, value: Optional[Union[str, int, float]]) -> Optional[Tuple[str, float]]:
         """Normalize width hints such as `fit`, percentages, or fixed chars."""
 
@@ -406,7 +456,9 @@ class ColumnsPrinter:
             minimal_cells = minimal_total
             target_cells = target_total
 
-        return max(target_cells, minimal_cells)
+        desired = max(target_cells, minimal_cells)
+        content_budget = max(0, available_total - separator_count)
+        return min(desired, content_budget)
 
     def _apply_initial_widths(self) -> None:
         """Seed slot widths from hints, then distribute any remaining space."""
@@ -418,7 +470,7 @@ class ColumnsPrinter:
         self._slot_widths = [1] * slot_count
         self._slot_padding = [self._padding] * slot_count
 
-        total_width = self._get_target_width()
+        max_content = self._get_target_width()
         column_count = len(self._columns)
 
         for col_idx, spec in enumerate(self._columns):
@@ -426,18 +478,25 @@ class ColumnsPrinter:
                 continue
             if spec.width[0] == "fit":
                 continue
-            target = self._resolve_width_hint(spec.width, total_width)
+            target = self._resolve_width_hint(spec.width, max_content)
             self._configure_column_width(col_idx, target)
 
         current_total = sum(self._column_total_width(idx) for idx in range(column_count))
         has_percent = any(spec.width and spec.width[0] == "percent" for spec in self._columns)
-        if current_total > total_width:
-            total_width = current_total
 
-        if not self._target_width_hint and not has_percent:
-            total_width = current_total
+        if self._target_width_hint or has_percent:
+            desired_content = max_content
+        else:
+            desired_content = min(current_total, max_content)
 
-        remaining = max(0, total_width - current_total)
+        if current_total > desired_content:
+            full_width = desired_content + (slot_count + 1)
+            self._clamp_total_width(full_width)
+            current_total = sum(self._column_total_width(idx) for idx in range(column_count))
+            remaining = 0
+        else:
+            remaining = max(0, desired_content - current_total)
+
         expandable = [idx for idx, spec in enumerate(self._columns) if spec.width is None]
         if not expandable:
             expandable = [
@@ -446,25 +505,23 @@ class ColumnsPrinter:
                 if spec.width is None or (spec.width and spec.width[0] != "fit")
             ]
 
-        if remaining > 0 and expandable:
-            while remaining > 0:
-                progressed = False
-                for col_idx in expandable:
-                    if remaining <= 0:
-                        break
-                    spec = self._columns[col_idx]
-                    if spec.width and spec.width[0] == "fit":
-                        continue
-                    self._grow_column(col_idx, 1)
-                    remaining -= 1
-                    progressed = True
-                if not progressed:
+        while remaining > 0:
+            progressed = False
+            for col_idx in expandable:
+                if remaining <= 0:
                     break
+                spec = self._columns[col_idx]
+                if spec.width and spec.width[0] == "fit":
+                    continue
+                self._grow_column(col_idx, 1)
+                remaining -= 1
+                progressed = True
+            if not progressed:
+                break
 
-        slot_count = self._slot_count()
-        separator_count = slot_count + 1 if slot_count else 0
-        current_total = sum(self._column_total_width(idx) for idx in range(column_count))
-        self._current_total_width = current_total + separator_count
+        full_width = max_content + (slot_count + 1)
+        self._clamp_total_width(full_width)
+        self._update_current_total_width()
 
     def _resolve_width_hint(self, hint: Optional[Tuple[str, float]], total_width: int) -> Optional[int]:
         """Convert a parsed width hint into an absolute character width."""
@@ -503,6 +560,10 @@ class ColumnsPrinter:
                 if extra <= 0:
                     break
 
+        for idx in slot_indices:
+            self._slot_min_widths[idx] = self._slot_widths[idx]
+            self._fixed_slots.add(idx)
+
     def _grow_column(self, col_idx: int, amount: int) -> None:
         """Expand a column span by distributing width across its slots."""
 
@@ -533,6 +594,112 @@ class ColumnsPrinter:
             total += self._slot_widths[slot_idx] + (self._slot_padding[slot_idx] * 2)
         total += max(0, span - 1)
         return total
+
+    def _row_width_budget(self) -> int:
+        """Return the maximum bordered row width that fits in the terminal."""
+
+        term_cols, _ = self._terminal_size()
+        if term_cols <= 0:
+            term_cols = 80
+        return max(0, term_cols - (self._level_max_length + 2))
+
+    def _clamp_total_width(self, max_total: Optional[int] = None) -> None:
+        """Reduce slot widths so the full bordered row does not exceed `max_total`."""
+
+        slot_count = self._slot_count()
+        if slot_count == 0:
+            return
+
+        if max_total is None:
+            max_total = self._row_width_budget()
+        if max_total <= 0:
+            return
+
+        separators = slot_count + 1
+        padding_total = sum((self._slot_padding[idx] * 2) for idx in range(slot_count))
+        max_content = max(0, max_total - separators - padding_total)
+        total = sum(self._slot_widths)
+        if total <= max_content:
+            self._update_current_total_width()
+            return
+
+        min_widths = self._slot_min_widths
+
+        while total > max_content:
+            reducible = [i for i in range(slot_count) if self._slot_widths[i] > min_widths[i]]
+            if not reducible:
+                break
+
+            max_w = max(self._slot_widths[i] for i in reducible)
+            count_max = sum(1 for i in reducible if self._slot_widths[i] == max_w)
+            next_candidates = [self._slot_widths[i] for i in reducible if self._slot_widths[i] < max_w]
+            min_at_max = max(min_widths[i] for i in reducible if self._slot_widths[i] == max_w)
+            next_candidates.append(min_at_max)
+            next_w = max(next_candidates)
+
+            available = (max_w - next_w) * count_max
+            need = total - max_content
+            reduce_total = min(available, need)
+            if reduce_total <= 0:
+                break
+
+            per_slot = reduce_total // count_max
+            extra = reduce_total % count_max
+            for idx in reducible:
+                if self._slot_widths[idx] == max_w:
+                    self._slot_widths[idx] -= per_slot
+                    if extra > 0:
+                        self._slot_widths[idx] -= 1
+                        extra -= 1
+                    if self._slot_widths[idx] < min_widths[idx]:
+                        self._slot_widths[idx] = min_widths[idx]
+            total = sum(self._slot_widths)
+
+        if total > max_content:
+            # Fallback: reduce padding and scale proportionally when minimums are infeasible.
+            room = max_total - separators - slot_count
+            new_pad = 0
+            if room > 0:
+                new_pad = min(self._padding, room // (2 * slot_count))
+            for idx in range(slot_count):
+                self._slot_padding[idx] = new_pad
+
+            padding_total = 2 * new_pad * slot_count
+            max_content = max(0, max_total - separators - padding_total)
+
+            if max_content < slot_count:
+                for idx in range(slot_count):
+                    self._slot_widths[idx] = 1
+                total = slot_count
+            else:
+                factor = max_content / total
+                scaled = [max(1, int(self._slot_widths[idx] * factor)) for idx in range(slot_count)]
+                leftover = max_content - sum(scaled)
+                if leftover > 0:
+                    fracs = sorted(
+                        (
+                            (self._slot_widths[idx] * factor) - int(self._slot_widths[idx] * factor),
+                            idx,
+                        )
+                        for idx in range(slot_count)
+                    )
+                    for _, idx in fracs[:leftover]:
+                        scaled[idx] += 1
+                self._slot_widths = scaled
+                total = sum(self._slot_widths)
+
+        self._update_current_total_width()
+
+    def _update_current_total_width(self) -> None:
+        """Store the full bordered width implied by the current slot widths."""
+
+        slot_count = self._slot_count()
+        if slot_count == 0:
+            self._current_total_width = 0
+            return
+
+        current_total = sum(self._column_total_width(idx) for idx in range(len(self._columns)))
+        self._current_total_width = current_total + (slot_count + 1)
 
     def _slot_count(self) -> int:
         """Return the number of physical slots in the current layout."""
@@ -568,6 +735,8 @@ class ColumnsPrinter:
                 continue
             if start >= len(self._slot_widths):
                 continue
+            if start in self._fixed_slots:
+                continue
 
             total_slot_width = 0
             for offset in range(span):
@@ -588,6 +757,9 @@ class ColumnsPrinter:
             if inner_width < label_len:
                 deficit = label_len - inner_width
                 self._slot_widths[start] += deficit
+                self._slot_min_widths[start] = max(self._slot_min_widths[start], label_len)
+
+        self._clamp_total_width()
 
     def _prepare_values(self, values: Iterable) -> List[str]:
         """Normalize row values to strings and match the active slot count."""
@@ -607,9 +779,13 @@ class ColumnsPrinter:
         for idx, value in enumerate(values):
             if idx >= len(self._slot_widths):
                 break
+            if idx in self._fixed_slots:
+                continue
             current = _visible_length(value)
             if current > self._slot_widths[idx]:
                 self._slot_widths[idx] = current
+
+        self._clamp_total_width()
 
     def _render_header(self) -> str:
         """Build the visible header row with current widths and padding."""
@@ -628,7 +804,7 @@ class ColumnsPrinter:
             inner_width = max(0, total_width - left_pad_val - right_pad_val)
             pad_left = " " * left_pad_val
             pad_right = " " * right_pad_val
-            content = _pad_visible(spec.label, inner_width)
+            content = _fit_visible(spec.label, inner_width)
             cells.append(f"{pad_left}{content}{pad_right}")
 
         return "|" + "|".join(cells) + "|"
@@ -648,7 +824,7 @@ class ColumnsPrinter:
                 width = _visible_length(text)
             pad_width = self._slot_padding[idx] if idx < len(self._slot_padding) else self._padding
             pad = " " * pad_width
-            padded_text = _pad_visible(text, width)
+            padded_text = _fit_visible(text, width)
             cell = f"{pad}{padded_text}{pad}"
             cells.append(cell)
 
