@@ -991,7 +991,6 @@ class ProgressBar:
 
         return self.step()
 
-    @_render_locked
     def _should_render(self, force: bool = False, allow_repeat: bool = False) -> bool:
         """Return whether this logical state change should emit a new frame."""
 
@@ -1011,7 +1010,6 @@ class ProgressBar:
 
         return (current_step - last_output_step) >= self._output_interval
 
-    @_render_locked
     def _resolve_rendered_line(
         self,
         columns: int,
@@ -1096,7 +1094,6 @@ class ProgressBar:
                     if not sys.is_finalizing():
                         raise
 
-    @_render_locked
     def calc_time(self, iteration, total_steps=None):
         """Return elapsed and estimated remaining time for the progress line."""
 
@@ -1110,7 +1107,6 @@ class ProgressBar:
         remaining = str(datetime.timedelta(seconds=int((used_time / max(completed, 1)) * total_steps)))
         return f"{formatted_time} / {remaining}"
 
-    @_render_locked
     def _render_snapshot(
         self,
         columns: Optional[int] = None,
@@ -1195,7 +1191,6 @@ class ProgressBar:
         self._last_rendered_line = rendered_line
         return rendered_line
 
-    @_render_locked
     def _render_line(
         self,
         bar_plain: str,
@@ -1272,7 +1267,6 @@ class ProgressBar:
 
         return rendered_out
 
-    @_render_locked
     def _animated_text(self, text: str) -> str:
         """Apply the sweeping highlight effect to one title-like string."""
 
@@ -1320,7 +1314,6 @@ class ProgressBar:
 
         return truncate_ansi(text, limit)
 
-    @_render_locked
     def _should_animate_title(
         self,
         backend_state: Optional[RenderBackendState] = None,
@@ -1340,7 +1333,6 @@ class ProgressBar:
             style_enabled = state.supports_styling
         return bool(style_enabled) and (state.supports_cursor or state.notebook)
 
-    @_render_locked
     def __bool__(self):
         """Mirror the truthiness of the wrapped iterable when defined."""
 
@@ -1348,7 +1340,6 @@ class ProgressBar:
             raise TypeError('bool() undefined when iterable == total == None')
         return bool(self.iterable)
 
-    @_render_locked
     def __len__(self):
         """Return the total number of logical steps when it can be inferred."""
 
@@ -1416,7 +1407,6 @@ class ProgressBar:
 
         return id(self)
 
-    @_render_locked
     def step(self) -> int:
         """Return the current logical progress position."""
 
@@ -1573,19 +1563,16 @@ class RollingProgressBar(ProgressBar):
 
         return changed
 
-    @_render_locked
     def _advance_phase(self, steps: int = 1) -> None:
         """Move the spinner head forward by one or more frames."""
 
         self._phase = (self._phase + max(1, int(steps))) % 1_000_000
 
-    @_render_locked
     def _render_position(self) -> int:
         """Use animation phase instead of step count for redraw throttling."""
 
         return self._phase
 
-    @_render_locked
     def _render_snapshot(
         self,
         columns: Optional[int] = None,
@@ -1639,7 +1626,6 @@ class RollingProgressBar(ProgressBar):
 
         return self._last_rendered_line
 
-    @_render_locked
     def _render_animation(self, bar_length: int, *, supports_styling: bool = True) -> tuple[str, str]:
         """Render the rolling head and trailing tail for the spinner bar."""
 
