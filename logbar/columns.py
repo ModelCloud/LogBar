@@ -53,10 +53,14 @@ def _fit_visible(text: str, target: int, placeholder: str = "...") -> str:
 
     if target >= ph_width:
         result.append(placeholder)
+        width += ph_width
 
     # Stop any active ANSI style from bleeding into trailing padding.
     if "\x1b" in text:
         result.append("\033[0m")
+
+    if width < target:
+        result.append(" " * (target - width))
 
     return "".join(result)
 

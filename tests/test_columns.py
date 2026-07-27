@@ -12,6 +12,8 @@ from unittest import mock
 
 import pytest
 from logbar import LogBar
+from logbar.columns import _fit_visible
+from logbar.drawing import visible_length
 
 log = LogBar.shared()
 
@@ -301,6 +303,18 @@ def test_columns_ignore_ansi_sequences():
     assert row_lines
     assert any('FAIL' in line for line in row_lines)
     assert any('READY' in line for line in row_lines)
+
+
+def test_columns_fit_visible_exact_width_for_wide_chars():
+    """Truncated cells with double-width characters must still match the target width."""
+
+    text = "\u4e2d\u6587\u6d4b\u8bd5"  # four CJK chars, visible width 8
+    assert visible_length(_fit_visible(text, 3)) == 3
+    assert visible_length(_fit_visible(text, 4)) == 4
+    assert visible_length(_fit_visible(text, 5)) == 5
+    assert visible_length(_fit_visible(text, 6)) == 6
+    assert _fit_visible(text, 8) == text
+    assert visible_length(_fit_visible(text, 10)) == 10
 
 
 def test_columns_clamp_wide_rows_to_terminal_width():
