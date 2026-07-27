@@ -527,6 +527,10 @@ def _clear_progress_stack_locked(
     count = coordinator_state._last_drawn_progress_count
     state = backend_state or _current_render_backend_state()
 
+    if count == 0:
+        _set_cursor_visibility_locked(True, backend_state=state)
+        return
+
     if state.headless:
         coordinator_state._last_drawn_progress_count = 0
         coordinator_state._last_rendered_terminal_size = None

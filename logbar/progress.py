@@ -212,14 +212,10 @@ class ProgressStyle:
     def render(self, filled: int, empty: int) -> tuple[str, str]:
         """Render the bar using whole filled and empty cells."""
 
-        result = self._bar_renderer().render(
-            filled=filled,
-            empty=empty,
-            select_color=self._select_color,
-            empty_color=self.empty_color,
-            head_color=self.head_color,
+        return self.render_units(
+            total_cells=filled + empty,
+            filled_units=filled * SUBCELL_RESOLUTION,
         )
-        return result.plain, result.rendered
 
     def render_units(
         self,
@@ -230,14 +226,95 @@ class ProgressStyle:
     ) -> tuple[str, str]:
         """Render the bar using sub-cell units for smoother progress."""
 
-        result = self._bar_renderer(units_per_cell=units_per_cell).render_units(
+        renderer = self._bar_renderer(units_per_cell=units_per_cell)
+        result = renderer.render_units(
             total_cells=total_cells,
             filled_units=filled_units,
-            select_color=self._select_color,
-            empty_color=self.empty_color,
-            head_color=self.head_color,
         )
-        return result.plain, result.rendered
+        plain = result.plain
+
+        width = max(0, int(total_cells))
+        resolution = max(1, int(units_per_cell))
+        total_units = width * resolution
+        filled_units = max(0, min(int(filled_units), total_units))
+        full_cells, partial_units = divmod(filled_units, resolution)
+        occupied_cells = min(width, full_cells + (1 if partial_units else 0))
+
+        rendered = self._render_colored_bar(plain, occupied_cells)
+        return plain, rendered
+
+    def _render_colored_bar(self, plain: str, occupied_cells: int) -> str:
+        """Apply fill, head, and empty colors to an already-rasterized bar."""
+
+        if not self.fill_colors and not self.empty_color and not self.head_color:
+            return plain
+
+        width = len(plain)
+        if width == 0:
+            return ""
+
+        segments: list[str] = []
+        head_idx = occupied_cells - 1 if self.head_color and occupied_cells > 0 else -1
+        fill_end = head_idx if head_idx >= 0 else occupied_cells
+
+        palette = self.fill_colors
+        if palette and fill_end > 0:
+            fill_plain = plain[:fill_end]
+            palette_len = len(palette)
+            if self.gradient and palette_len > 1 and fill_end > 1:
+                scale_n = fill_end - 1
+                scale_d = palette_len - 1
+                start = 0
+                p = 0
+                while start < fill_end:
+                    end = ((p + 1) * scale_n + scale_d - 1) // scale_d
+                    if end > fill_end:
+                        end = fill_end
+                    if end <= start:
+                        end = start + 1
+                    color = palette[p]
+                    if color:
+                        segments.append(color)
+                    segments.append(fill_plain[start:end])
+                    if color:
+                        segments.append(ANSI_RESET)
+                    start = end
+                    p += 1
+            elif palette_len == 1:
+                color = palette[0]
+                if color:
+                    segments.append(color)
+                    segments.append(fill_plain)
+                    segments.append(ANSI_RESET)
+                else:
+                    segments.append(fill_plain)
+            else:
+                for idx in range(fill_end):
+                    color = palette[idx % palette_len]
+                    if color:
+                        segments.append(color)
+                        segments.append(fill_plain[idx])
+                        segments.append(ANSI_RESET)
+                    else:
+                        segments.append(fill_plain[idx])
+        elif fill_end > 0:
+            segments.append(plain[:fill_end])
+
+        if head_idx >= 0:
+            segments.append(self.head_color)
+            segments.append(plain[head_idx])
+            segments.append(ANSI_RESET)
+
+        if occupied_cells < width:
+            empty_color = self.empty_color
+            if empty_color:
+                segments.append(empty_color)
+                segments.append(plain[occupied_cells:])
+                segments.append(ANSI_RESET)
+            else:
+                segments.append(plain[occupied_cells:])
+
+        return "".join(segments)
 
     @lru_cache(maxsize=4)
     def _bar_renderer(self, units_per_cell: int = SUBCELL_RESOLUTION) -> CellBarRenderer:
