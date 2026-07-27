@@ -202,10 +202,11 @@ def _is_headless_environment(*, notebook: bool = False) -> bool:
     if notebook:
         return True
 
-    env_vars = os.environ
-    for key in env_vars:
-        if key in _HEADLESS_ENV_VARS or key.startswith(_HEADLESS_ENV_PREFIXES):
-            return True
+    if any(name in os.environ for name in _HEADLESS_ENV_VARS):
+        return True
+
+    if any(key.startswith(_HEADLESS_ENV_PREFIXES) for key in os.environ):
+        return True
 
     if os.environ.get("TERM", "").strip().lower() == "dumb":
         return True
@@ -229,18 +230,16 @@ def render_backend_state(
     is_tty = _is_stream_tty(target)
 
     term_value = str(os.environ.get("TERM", "")).strip().lower()
-    force_cursor = bool(os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "").strip())
+    force_cursor_value = os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "")
+    force_cursor = bool(force_cursor_value.strip())
     force_ansi = any(
-        str(os.environ.get(name, "")).strip().lower() not in {"", "0", "false", "off", "no"}
+        _env_flag_enabled(name)
         for name in ("LOGBAR_FORCE_ANSI", "CLICOLOR_FORCE", "FORCE_COLOR")
     )
-    disable_styling = (
-        "NO_COLOR" in os.environ
-        or str(os.environ.get("ANSI_COLORS_DISABLED", "")).strip().lower() not in {"", "0", "false", "off", "no"}
-    )
+    disable_styling = "NO_COLOR" in os.environ or _env_flag_enabled("ANSI_COLORS_DISABLED")
     raw_ansi_blocked = term_value == "dumb" and not force_ansi
 
-    supports_cursor = is_tty or bool(os.environ.get("LOGBAR_FORCE_TERMINAL_CURSOR", "").strip())
+    supports_cursor = is_tty or force_cursor
     if notebook:
         supports_cursor = False
     elif force_cursor:
