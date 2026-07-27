@@ -239,6 +239,7 @@ class ProgressStyle:
         )
         return result.plain, result.rendered
 
+    @lru_cache(maxsize=4)
     def _bar_renderer(self, units_per_cell: int = SUBCELL_RESOLUTION) -> CellBarRenderer:
         """Build the low-level bar renderer for this style."""
 

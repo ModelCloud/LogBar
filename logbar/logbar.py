@@ -905,7 +905,12 @@ def _render_progress_stack_locked(
     rows = state.lines
 
     bars = _active_progress_bars()
-    if not bars and not precomputed and coordinator_state._last_drawn_progress_count == 0:
+    if (
+        state.supports_cursor
+        and not bars
+        and not precomputed
+        and coordinator_state._last_drawn_progress_count == 0
+    ):
         _record_progress_activity_locked()
         return
 
