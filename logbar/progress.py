@@ -239,6 +239,7 @@ class ProgressStyle:
         )
         return result.plain, result.rendered
 
+    @lru_cache(maxsize=4)
     def _bar_renderer(self, units_per_cell: int = SUBCELL_RESOLUTION) -> CellBarRenderer:
         """Build the low-level bar renderer for this style."""
 
@@ -1019,15 +1020,17 @@ class ProgressBar:
                         raise
 
     @_render_locked
-    def calc_time(self, iteration):
+    def calc_time(self, iteration, total_steps=None):
         """Return elapsed and estimated remaining time for the progress line."""
 
+        if total_steps is None:
+            total_steps = len(self)
         used_time = int(time.time() - self.time)
         formatted_time = str(datetime.timedelta(seconds=used_time))
         completed = iteration
         if self._render_mode == RenderMode.AUTO and iteration > 0:
             completed = iteration - 1
-        remaining = str(datetime.timedelta(seconds=int((used_time / max(completed, 1)) * len(self))))
+        remaining = str(datetime.timedelta(seconds=int((used_time / max(completed, 1)) * total_steps)))
         return f"{formatted_time} / {remaining}"
 
     @_render_locked
@@ -1047,10 +1050,11 @@ class ProgressBar:
 
         total_steps = len(self)
         effective_total = total_steps if total_steps else 1
+        current_step = self.step()
 
-        percent_num = self.step() / float(effective_total)
+        percent_num = current_step / float(effective_total)
         percent = ("{0:.1f}").format(100 * percent_num)
-        log_text = f"{self.calc_time(self.step())} [{self.step()}/{total_steps}] {percent}%"
+        log_text = f"{self.calc_time(current_step, total_steps)} [{current_step}/{total_steps}] {percent}%"
 
         pre_bar_size = 0
 
@@ -1060,7 +1064,7 @@ class ProgressBar:
             pre_bar_size += self.max_subtitle_len + 1
 
         if self.ui_show_left_steps:
-            left_current = self.step() - self.ui_show_left_steps_offset
+            left_current = current_step - self.ui_show_left_steps_offset
             left_total = total_steps - self.ui_show_left_steps_offset
             self.ui_show_left_steps_text = f"[{left_current} of {left_total}] "
             self.ui_show_left_steps_text_max_len = len(self.ui_show_left_steps_text)
@@ -1077,13 +1081,13 @@ class ProgressBar:
         self.bar_length = bar_length
 
         total_units = bar_length * SUBCELL_RESOLUTION
-        if self.step() >= effective_total and total_units > 0:
+        if current_step >= effective_total and total_units > 0:
             filled_units = total_units
         elif total_units > 0:
             # Keep very early progress visible by promoting tiny non-zero
             # values to the first sub-cell instead of leaving the bar empty.
-            filled_units = int((self.step() * total_units) / effective_total)
-            if 0 < self.step() < effective_total and filled_units == 0:
+            filled_units = int((current_step * total_units) / effective_total)
+            if 0 < current_step < effective_total and filled_units == 0:
                 filled_units = 1
         else:
             filled_units = 0
@@ -1094,6 +1098,8 @@ class ProgressBar:
         )
         if not supports_styling:
             bar_rendered = bar_plain
+
+        plain_width = pre_bar_size + bar_length + log_text_width + 2
 
         rendered_line = self._render_line(
             bar_plain=bar_plain,
@@ -1106,6 +1112,7 @@ class ProgressBar:
                 backend_state=backend_state,
                 style_enabled=supports_styling,
             ),
+            plain_width=plain_width,
         )
 
         self._last_rendered_line = rendered_line
@@ -1121,6 +1128,7 @@ class ProgressBar:
         bar_rendered: Optional[str] = None,
         supports_styling: bool = True,
         animate_title: Optional[bool] = None,
+        plain_width: Optional[int] = None,
     ) -> str:
         """Assemble the final visible line from title, bar, and status fields."""
 
@@ -1172,7 +1180,8 @@ class ProgressBar:
         rendered_out = ''.join(segments_rendered) if supports_styling else plain_out
 
         if columns is not None:
-            plain_width = visible_length(plain_out)
+            if plain_width is None:
+                plain_width = visible_length(plain_out)
             if plain_width > columns:
                 rendered_out = (
                     self._truncate_ansi(rendered_out, columns)

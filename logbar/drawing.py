@@ -51,6 +51,8 @@ _ANSI_BASIC_FG = {
 def strip_ansi(text: str) -> str:
     """Remove ANSI control sequences while leaving printable text intact."""
 
+    if "\x1b" not in text:
+        return text
     return ANSI_ESCAPE_RE.sub("", text)
 
 
@@ -266,6 +268,9 @@ def visible_length(text: str) -> int:
     if not text:
         return 0
 
+    if text.isascii() and text.isprintable():
+        return len(text)
+
     printable = 0
     for is_ansi, _token, width in iter_display_atoms(text):
         if not is_ansi:
@@ -437,6 +442,11 @@ def truncate_ansi(text: str, limit: int) -> str:
     if limit <= 0:
         return ANSI_RESET
 
+    if text.isascii() and text.isprintable():
+        if len(text) <= limit:
+            return text
+        return text[:limit]
+
     result = []
     printable = 0
 
@@ -518,15 +528,37 @@ class CellBarRenderer:
         full_cells, partial_units = divmod(filled_units, resolution)
         occupied_cells = min(width, full_cells + (1 if partial_units else 0))
 
+        if partial_units:
+            partial_char = self._partial_char(partial_units)
+            if full_cells == 0:
+                plain = partial_char + self.empty_char * (width - 1)
+            else:
+                plain = (
+                    self.fill_char * full_cells
+                    + partial_char
+                    + self.empty_char * (width - full_cells - 1)
+                )
+        elif full_cells == 0:
+            plain = self.empty_char * width
+        else:
+            empty_count = width - full_cells
+            if self.head_char:
+                plain = (
+                    self.fill_char * (full_cells - 1)
+                    + self.head_char
+                    + self.empty_char * empty_count
+                )
+            else:
+                plain = self.fill_char * full_cells + self.empty_char * empty_count
+
+        if not select_color and not empty_color and not head_color:
+            return BarRenderResult(plain=plain, rendered=plain)
+
         color_selector = select_color or (lambda idx, total: "")
-        plain_chars: list[str] = []
         rendered_segments: list[str] = []
         current_color: Optional[str] = None
 
-        for idx in range(width):
-            char = self._cell_char(idx, full_cells, partial_units)
-            plain_chars.append(char)
-
+        for idx, char in enumerate(plain):
             color = ""
             if idx < occupied_cells:
                 color = color_selector(idx, occupied_cells)
@@ -547,21 +579,7 @@ class CellBarRenderer:
         if current_color:
             rendered_segments.append(ANSI_RESET)
 
-        plain = "".join(plain_chars)
         return BarRenderResult(plain=plain, rendered="".join(rendered_segments))
-
-    def _cell_char(self, idx: int, full_cells: int, partial_units: int) -> str:
-        """Pick the visible glyph for a single cell of the bar."""
-
-        if idx < full_cells:
-            if self.head_char and partial_units == 0 and idx == full_cells - 1:
-                return self.head_char
-            return self.fill_char
-
-        if partial_units and idx == full_cells:
-            return self._partial_char(partial_units)
-
-        return self.empty_char
 
     def _partial_char(self, partial_units: int) -> str:
         """Convert a partial fill amount into the closest ramp character."""
