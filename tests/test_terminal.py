@@ -111,3 +111,78 @@ class TestTerminal(unittest.TestCase):
         self.assertTrue(forced_color.supports_ansi)
         self.assertTrue(forced_color.supports_styling)
         self.assertFalse(forced_color.supports_cursor)
+
+    def test_terminal_size_prefers_tty_query_over_stale_env(self):
+        """Do not let stale COLUMNS/LINES override the real terminal size."""
+
+        class FakeTTYStream:
+            """A stream that claims to be a TTY and exposes a file descriptor."""
+
+            def isatty(self):
+                return True
+
+            def fileno(self):
+                return 17
+
+        stream = FakeTTYStream()
+
+        with mock.patch.dict(
+            "logbar.terminal.os.environ",
+            {"COLUMNS": "40", "LINES": "10"},
+            clear=True,
+        ), \
+             mock.patch(
+            "logbar.terminal.os.get_terminal_size",
+            return_value=os.terminal_size((120, 40)),
+        ), \
+             mock.patch(
+            "logbar.terminal.shutil.get_terminal_size",
+            side_effect=AssertionError("should not use shutil fallback"),
+        ):
+            columns, lines = terminal_module.terminal_size(stream=stream)
+
+        self.assertEqual((columns, lines), (120, 40))
+
+    def test_terminal_size_uses_env_when_stream_is_not_a_tty(self):
+        """Respect COLUMNS/LINES when there is no real terminal to query."""
+
+        class NonTTYStream:
+            def isatty(self):
+                return False
+
+        stream = NonTTYStream()
+
+        with mock.patch.dict(
+            "logbar.terminal.os.environ",
+            {"COLUMNS": "55", "LINES": "22"},
+            clear=True,
+        ), \
+             mock.patch(
+            "logbar.terminal.shutil.get_terminal_size",
+            return_value=os.terminal_size((80, 24)),
+        ):
+            columns, lines = terminal_module.terminal_size(stream=stream)
+
+        self.assertEqual((columns, lines), (55, 22))
+
+    def test_terminal_size_queries_stream_without_isatty(self):
+        """A stream with only ``fileno`` is still probed for its size."""
+
+        class StreamWithFilenoOnly:
+            def fileno(self):
+                return 9
+
+        stream = StreamWithFilenoOnly()
+
+        with mock.patch.dict("logbar.terminal.os.environ", {}, clear=True), \
+             mock.patch(
+            "logbar.terminal.os.get_terminal_size",
+            return_value=os.terminal_size((100, 50)),
+        ), \
+             mock.patch(
+            "logbar.terminal.shutil.get_terminal_size",
+            side_effect=AssertionError("should not use shutil fallback"),
+        ):
+            columns, lines = terminal_module.terminal_size(stream=stream)
+
+        self.assertEqual((columns, lines), (100, 50))

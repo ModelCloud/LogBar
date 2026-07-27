@@ -32,7 +32,10 @@ def _stream_terminal_size(stream: Optional[object], fallback: tuple[int, int]) -
     """Query terminal size from a specific stream when it exposes `fileno()`."""
 
     target = stream if stream is not None else sys.stdout
-    fileno = getattr(target, "fileno", None)
+    try:
+        fileno = getattr(target, "fileno", None)
+    except (AttributeError, OSError, ValueError):
+        return None
     if not callable(fileno):
         return None
 
@@ -46,50 +49,63 @@ def _stream_terminal_size(stream: Optional[object], fallback: tuple[int, int]) -
 def terminal_size(fallback=(80, 24), stream: Optional[object] = None):
     """Get the size of the terminal window.
 
-    For each of the two dimensions, the environment variable, COLUMNS
-    and LINES respectively, is checked. If the variable is defined and
-    the value is a positive integer, it is used.
+    When ``stream`` reports itself as a TTY, the active terminal is queried
+    directly through its file descriptor (``os.get_terminal_size``) so that
+    stale ``COLUMNS``/``LINES`` environment variables do not override a resized
+    terminal. This matters for multiplexers such as tmux/screen, where the
+    shell may inherit an old window size.
 
-    When COLUMNS or LINES is not defined, which is the common case,
-    shutil.get_terminal_size is used to determine the current terminal size.
+    If ``stream`` is not a TTY or its file descriptor cannot be queried,
+    ``shutil.get_terminal_size`` is used. That helper will fall back to the
+    ``COLUMNS``/``LINES`` environment variables and finally to the supplied
+    fallback tuple.
 
     If the terminal size cannot be successfully queried, either because
     the system doesn't support querying, or because we are not
     connected to a terminal, the value given in fallback parameter
     is used. Fallback defaults to (80, 24) which is the default
     size used by many terminal emulators.
-
-    The value returned is a named tuple of type os.terminal_size.
     """
-    # columns, lines are the working values
+
+    target = stream if stream is not None else sys.stdout
+
+    isatty = getattr(target, "isatty", None)
+    try:
+        if callable(isatty) and not isatty():
+            pass
+        else:
+            size = _stream_terminal_size(target, fallback)
+            if size is not None:
+                return (max(0, int(size[0])), max(0, int(size[1])))
+    except (AttributeError, OSError, ValueError):
+        pass
+
+    columns = 0
+    lines = 0
     try:
         columns = int(os.environ['COLUMNS'])
     except (KeyError, ValueError):
-        columns = 0
+        pass
 
     try:
         lines = int(os.environ['LINES'])
     except (KeyError, ValueError):
-        lines = 0
+        pass
 
-    # only query if necessary
     if columns <= 0 or lines <= 0:
-        size = _stream_terminal_size(stream, fallback)
-        if size is None:
-            try:
-                queried = shutil.get_terminal_size(fallback)
-                size = (queried.columns or fallback[0], queried.lines or fallback[1])
-            except (OSError, ValueError):
-                # shutil.get_terminal_size failed because the runtime does not have an
-                # attached terminal. Fall back to the provided default which mirrors
-                # the behaviour of shutil.get_terminal_size when a fallback is supplied.
-                size = fallback
-        if columns <= 0:
-            columns = size[0] or fallback[0]
-        if lines <= 0:
-            lines = size[1] or fallback[1]
+        try:
+            queried = shutil.get_terminal_size(fallback)
+            if columns <= 0:
+                columns = queried.columns or fallback[0]
+            if lines <= 0:
+                lines = queried.lines or fallback[1]
+        except (OSError, ValueError):
+            if columns <= 0:
+                columns = fallback[0]
+            if lines <= 0:
+                lines = fallback[1]
 
-    return (columns, lines)
+    return (max(0, int(columns)), max(0, int(lines)))
 
 
 # Environment markers used by AI-agent, remote, or non-interactive runtimes.
