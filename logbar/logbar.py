@@ -279,12 +279,15 @@ def render_lock() -> threading.RLock:
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard for type checkers
     from .progress import ProgressBar
 
-def _sync_default_coordinator_state() -> None:
+def _sync_default_coordinator_state(name=None, value=None) -> None:
     """Mirror coordinator-owned state onto legacy module globals for compatibility."""
 
-    state = _DEFAULT_RENDER_COORDINATOR.state
-    for field_name in state.field_names():
-        globals()[field_name] = getattr(state, field_name)
+    if name is None:
+        state = _DEFAULT_RENDER_COORDINATOR.state
+        for field_name in state.field_names():
+            globals()[field_name] = getattr(state, field_name)
+    else:
+        globals()[name] = value
 
 
 def _coordinator_state():
@@ -294,7 +297,7 @@ def _coordinator_state():
 
 
 _DEFAULT_RENDER_COORDINATOR = RenderCoordinator(
-    on_state_change=lambda _name, _value: _sync_default_coordinator_state()
+    on_state_change=lambda name, value: _sync_default_coordinator_state(name, value)
 )
 _ROOT_STACK_REGION = LineRegion(vertical_anchor="bottom")
 _DEFAULT_RENDER_COORDINATOR.register_region(_DEFAULT_RENDER_COORDINATOR.root_region_id, _ROOT_STACK_REGION)
@@ -902,6 +905,10 @@ def _render_progress_stack_locked(
     rows = state.lines
 
     bars = _active_progress_bars()
+    if not bars and not precomputed and coordinator_state._last_drawn_progress_count == 0:
+        _record_progress_activity_locked()
+        return
+
     with _STATE_LOCK:
         dirty_bars = set(coordinator_state._dirty_progress_bars)
     to_remove = []

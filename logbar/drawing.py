@@ -51,6 +51,8 @@ _ANSI_BASIC_FG = {
 def strip_ansi(text: str) -> str:
     """Remove ANSI control sequences while leaving printable text intact."""
 
+    if "\x1b" not in text:
+        return text
     return ANSI_ESCAPE_RE.sub("", text)
 
 
@@ -266,6 +268,9 @@ def visible_length(text: str) -> int:
     if not text:
         return 0
 
+    if text.isascii() and text.isprintable():
+        return len(text)
+
     printable = 0
     for is_ansi, _token, width in iter_display_atoms(text):
         if not is_ansi:
@@ -436,6 +441,11 @@ def truncate_ansi(text: str, limit: int) -> str:
 
     if limit <= 0:
         return ANSI_RESET
+
+    if text.isascii() and text.isprintable():
+        if len(text) <= limit:
+            return text
+        return text[:limit]
 
     result = []
     printable = 0
