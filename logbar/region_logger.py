@@ -47,6 +47,14 @@ class RegionLogBar(LogBar):
 
         return self._supports_ansi
 
+    def _resolve_symbol_prefix(self, supports_ansi: bool) -> bool:
+        """Resolve symbol mode from this region's own ANSI capability."""
+
+        return self._symbol_prefix and _terminal_supports_symbols(
+            self._supports_ansi,
+            sys.stdout,
+        )
+
     def set_on_change(self, callback: Optional[Callable[["RegionLogBar"], None]]) -> "RegionLogBar":
         """Install or remove the callback invoked after region mutations."""
 
@@ -134,7 +142,7 @@ class RegionLogBar(LogBar):
 
         del normalized_level, allow_defer, backend_state
 
-        use_symbol_prefix = self._symbol_prefix and _terminal_supports_symbols(self._supports_ansi, sys.stdout)
+        use_symbol_prefix = self._resolve_symbol_prefix(self._supports_ansi)
         prefix = _level_prefix(level_label, self._supports_ansi, use_symbol_prefix)
         message_lines = str(str_msg).splitlines() or [""]
         for line in message_lines:

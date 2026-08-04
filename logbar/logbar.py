@@ -781,20 +781,6 @@ def _prepare_progress_stack_for_log_locked(backend_state: Optional[RenderBackend
     return True
 
 
-@lru_cache(maxsize=32)
-def _level_prefix(level_label: str, supports_ansi: bool) -> str:
-    """Build and cache the colored or plain log-level prefix."""
-
-    level_width = max(LEVEL_MAX_LENGTH, len(level_label))
-    level_padding = " " * (level_width - len(level_label))
-    if not supports_ansi:
-        return f"{level_label}{level_padding} "
-
-    reset = COLORS["RESET"]
-    color = COLORS.get(level_label, reset)
-    return f"{color}{level_label}{reset}{level_padding} "
-
-
 def _iter_contiguous_blocks(indexes: Sequence[int]):
     """Group sorted row indexes into contiguous rewrite blocks."""
 
@@ -1298,6 +1284,8 @@ LEVEL_SYMBOLS = {
 def _symbol_prefix_default() -> bool:
     """Return whether the colored symbol prefix should be enabled by default."""
 
+    if _env_flag_enabled("LOGBAR_FORCE_SYMBOL_PREFIX"):
+        return True
     return not _env_flag_enabled("LOGBAR_DISABLE_SYMBOL_PREFIX")
 
 
@@ -1676,6 +1664,11 @@ class LogBar(logging.Logger):
 
         super().setLevel(self._normalize_level(level))
 
+    def _resolve_symbol_prefix(self, supports_ansi: bool) -> bool:
+        """Return whether this logger should reserve/use a one-character symbol prefix."""
+
+        return self._symbol_prefix and _terminal_supports_symbols(supports_ansi, sys.stdout)
+
     def columns(self, *headers, cols: Optional[Sequence] = None, width: Optional[Union[str, int, float]] = None, padding: int = 2):
         """Return a column-aware helper that keeps column widths aligned."""
 
@@ -1695,10 +1688,7 @@ class LogBar(logging.Logger):
                 header_defs = list(headers)
 
         backend_state = _current_render_backend_state()
-        use_symbol = self._symbol_prefix and _terminal_supports_symbols(
-            backend_state.supports_ansi,
-            sys.stdout,
-        )
+        use_symbol = self._resolve_symbol_prefix(backend_state.supports_ansi)
         level_max_length = _level_max_length(use_symbol)
 
         return ColumnsPrinter(
@@ -1782,10 +1772,7 @@ class LogBar(logging.Logger):
         backend_state = backend_state or _current_render_backend_state()
         columns = backend_state.columns
         terminal_rows = backend_state.lines
-        use_symbol_prefix = self._symbol_prefix and _terminal_supports_symbols(
-            backend_state.supports_ansi,
-            sys.stdout,
-        )
+        use_symbol_prefix = self._resolve_symbol_prefix(backend_state.supports_ansi)
         level_width = _level_width(level_label, use_symbol_prefix)
 
         with _STATE_LOCK:
