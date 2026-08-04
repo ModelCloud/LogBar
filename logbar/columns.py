@@ -131,7 +131,7 @@ class ColumnsPrinter:
         padding: int = 2,
         width_hint: Optional[Union[str, int, float]] = None,
         level_enum: Any,
-        level_max_length: int,
+        level_max_length_provider: Callable[[], int],
         terminal_size_provider: Optional[Callable[[], Tuple[int, int]]] = None,
     ) -> None:
         """Create a column printer bound to a logger and initial layout hints."""
@@ -146,7 +146,7 @@ class ColumnsPrinter:
         self._target_width_hint: Optional[Tuple[str, float]] = self._parse_width_hint(width_hint)
         self._current_total_width: Optional[int] = None
         self._level_enum = level_enum
-        self._level_max_length = level_max_length
+        self._level_max_length_provider = level_max_length_provider
         self._terminal_size = terminal_size_provider or terminal_size
         self._level_proxies: Dict[Any, ColumnsPrinter._LevelProxy] = {}
         self._lock = threading.RLock()
@@ -155,6 +155,11 @@ class ColumnsPrinter:
 
         if headers:
             self._set_columns(headers)
+
+    def _get_level_max_length(self) -> int:
+        """Resolve the current level-prefix width from the logger at render time."""
+
+        return self._level_max_length_provider()
 
     @property
     def widths(self) -> List[int]:
@@ -435,7 +440,7 @@ class ColumnsPrinter:
 
         # The logger reserves one trailing space after the level prefix, so the
         # table row budget is terminal width minus the prefix, not minus two.
-        available_total = max(0, term_cols - (self._level_max_length + 1))
+        available_total = max(0, term_cols - (self._get_level_max_length() + 1))
 
         if hint:
             if hint[0] == "percent":
@@ -604,7 +609,7 @@ class ColumnsPrinter:
         if term_cols <= 0:
             term_cols = 80
         # Match the logger's prefix budget: one trailing space after the level.
-        return max(0, term_cols - (self._level_max_length + 1))
+        return max(0, term_cols - (self._get_level_max_length() + 1))
 
     def _clamp_total_width(self, max_total: Optional[int] = None) -> None:
         """Reduce slot widths so the full bordered row does not exceed `max_total`."""

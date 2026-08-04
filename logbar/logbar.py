@@ -1671,9 +1671,10 @@ class LogBar(logging.Logger):
             else:
                 header_defs = list(headers)
 
-        backend_state = _current_render_backend_state()
-        use_symbol = self._resolve_symbol_prefix(backend_state)
-        level_max_length = _level_max_length(use_symbol)
+        def _level_max_length_provider() -> int:
+            """Resolve the current prefix width from the logger at render time."""
+
+            return _level_max_length(self._resolve_symbol_prefix())
 
         return ColumnsPrinter(
             logger=self,
@@ -1681,7 +1682,7 @@ class LogBar(logging.Logger):
             padding=padding,
             width_hint=width,
             level_enum=LEVEL,
-            level_max_length=level_max_length,
+            level_max_length_provider=_level_max_length_provider,
             terminal_size_provider=lambda: terminal_size(),
         )
 
