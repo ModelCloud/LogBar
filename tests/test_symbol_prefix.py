@@ -57,7 +57,7 @@ class TestSymbolPrefix(unittest.TestCase):
             self.assertFalse(_symbol_prefix_default())
 
     def test_force_symbol_prefix_overrides_disable(self):
-        """LOGBAR_FORCE_SYMBOL_PREFIX wins over the disable flag."""
+        """LOGBAR_FORCE_SYMBOL_PREFIX wins over the disable flag when color is available."""
 
         env = {
             "LOGBAR_DISABLE_SYMBOL_PREFIX": "1",
@@ -67,6 +67,19 @@ class TestSymbolPrefix(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True):
             self.assertTrue(
                 _terminal_supports_symbols(supports_ansi=True, stream=fake_stream)
+            )
+
+    def test_force_symbol_prefix_requires_color(self):
+        """LOGBAR_FORCE_SYMBOL_PREFIX does not emit symbols without ANSI color support."""
+
+        fake_stream = mock.Mock(isatty=mock.Mock(return_value=True))
+        with mock.patch.dict(
+            os.environ,
+            {"LOGBAR_FORCE_SYMBOL_PREFIX": "1"},
+            clear=True,
+        ):
+            self.assertFalse(
+                _terminal_supports_symbols(supports_ansi=False, stream=fake_stream)
             )
 
     def test_terminal_supports_symbols_requires_ansi(self):

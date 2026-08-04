@@ -1295,11 +1295,13 @@ def _terminal_supports_symbols(
 ) -> bool:
     """Best-effort check that the terminal can render colored Unicode symbols."""
 
+    if not supports_ansi:
+        # Symbols are only useful when color can differentiate log levels.
+        return False
+
     if _env_flag_enabled("LOGBAR_FORCE_SYMBOL_PREFIX"):
         return True
     if _env_flag_enabled("LOGBAR_DISABLE_SYMBOL_PREFIX"):
-        return False
-    if not supports_ansi:
         return False
 
     if stream is None:
