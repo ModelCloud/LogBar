@@ -148,10 +148,7 @@ def _log_headless_state_once(backend_state: Optional[RenderBackendState] = None)
         except Exception:
             return
 
-    log.info(
-        "LogBar: headless/AI-agent/notebook/CI environment detected; "
-        "high-frequency progress bars and animations are disabled."
-    )
+    log.info("LogBar: headless/CI mode; progress animations disabled.")
 
 
 def _stdout_supports_cursor_movement() -> bool:
@@ -1291,7 +1288,7 @@ LEVEL_MAX_LENGTH = max(len(level.value) for level in LEVEL)  # longest standard 
 
 LEVEL_SYMBOLS = {
     "DEBUG": "◆",
-    "INFO": "●",
+    "INFO": "⬤",
     "WARN": "▲",
     "ERROR": "■",
     "CRIT": "◉",

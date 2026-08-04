@@ -279,12 +279,13 @@ def render_backend_state(
 
     headless = _is_headless_environment(notebook=notebook)
 
-    # A headless backend should never claim cursor/ANSI support; the flag is
-    # the canonical signal used by the rest of the renderer to suppress draws.
+    # A headless backend should never claim cursor support. ANSI color and
+    # styling are still honored when the user explicitly forces them.
     if headless:
         supports_cursor = False
-        supports_ansi = False
-        supports_styling = False
+        if not force_ansi:
+            supports_ansi = False
+            supports_styling = False
 
     return RenderBackendState(
         columns=max(0, int(columns)),
