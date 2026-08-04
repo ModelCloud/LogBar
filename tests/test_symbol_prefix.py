@@ -17,8 +17,8 @@ from logbar.logbar import (
     _level_prefix,
     _level_width,
     _symbol_prefix_default,
-    _terminal_supports_symbols,
 )
+from logbar.terminal import render_backend_state
 
 
 class TestSymbolPrefix(unittest.TestCase):
@@ -62,31 +62,38 @@ class TestSymbolPrefix(unittest.TestCase):
         env = {
             "LOGBAR_DISABLE_SYMBOL_PREFIX": "1",
             "LOGBAR_FORCE_SYMBOL_PREFIX": "1",
+            "LOGBAR_FORCE_ANSI": "1",
         }
         fake_stream = mock.Mock(isatty=mock.Mock(return_value=False))
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertTrue(
-                _terminal_supports_symbols(supports_ansi=True, stream=fake_stream)
+            state = render_backend_state(
+                stream=fake_stream, size_provider=lambda: (80, 24)
             )
+        self.assertTrue(state.supports_symbols)
 
     def test_force_symbol_prefix_requires_color(self):
         """LOGBAR_FORCE_SYMBOL_PREFIX does not emit symbols without ANSI color support."""
 
-        fake_stream = mock.Mock(isatty=mock.Mock(return_value=True))
+        fake_stream = mock.Mock(isatty=mock.Mock(return_value=False))
         with mock.patch.dict(
             os.environ,
             {"LOGBAR_FORCE_SYMBOL_PREFIX": "1"},
             clear=True,
         ):
-            self.assertFalse(
-                _terminal_supports_symbols(supports_ansi=False, stream=fake_stream)
+            state = render_backend_state(
+                stream=fake_stream, size_provider=lambda: (80, 24)
             )
+        self.assertFalse(state.supports_symbols)
 
-    def test_terminal_supports_symbols_requires_ansi(self):
+    def test_symbol_prefix_requires_ansi(self):
         """Symbol prefixes are not used when ANSI colors are unavailable."""
 
-        fake_stream = mock.Mock(isatty=mock.Mock(return_value=True))
-        self.assertFalse(_terminal_supports_symbols(supports_ansi=False, stream=fake_stream))
+        fake_stream = mock.Mock(isatty=mock.Mock(return_value=False))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            state = render_backend_state(
+                stream=fake_stream, size_provider=lambda: (80, 24)
+            )
+        self.assertFalse(state.supports_symbols)
 
     def test_set_symbol_prefix_changes_behavior(self):
         """LogBar.set_symbol_prefix toggles the symbol-prefix mode."""

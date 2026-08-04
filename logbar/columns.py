@@ -603,7 +603,8 @@ class ColumnsPrinter:
         term_cols, _ = self._terminal_size()
         if term_cols <= 0:
             term_cols = 80
-        return max(0, term_cols - (self._level_max_length + 2))
+        # Match the logger's prefix budget: one trailing space after the level.
+        return max(0, term_cols - (self._level_max_length + 1))
 
     def _clamp_total_width(self, max_total: Optional[int] = None) -> None:
         """Reduce slot widths so the full bordered row does not exceed `max_total`."""

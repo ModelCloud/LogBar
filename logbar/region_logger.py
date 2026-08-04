@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-import sys
-
 from typing import Callable, Optional, Sequence, Union
 
 from .logbar import LEVEL, LogBar, _RENDER_LOCK, _level_prefix

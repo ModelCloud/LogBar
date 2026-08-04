@@ -1291,28 +1291,6 @@ def _symbol_prefix_default() -> bool:
     return not _env_flag_enabled("LOGBAR_DISABLE_SYMBOL_PREFIX")
 
 
-def _terminal_supports_symbols(
-    supports_ansi: bool = False,
-    stream: Optional[object] = None,
-) -> bool:
-    """Best-effort check that the terminal can render colored Unicode symbols."""
-
-    if not supports_ansi:
-        # Symbols are only useful when color can differentiate log levels.
-        return False
-
-    if _env_flag_enabled("LOGBAR_FORCE_SYMBOL_PREFIX"):
-        return True
-
-    if stream is None:
-        stream = sys.stdout
-    isatty = getattr(stream, "isatty", None)
-    try:
-        return bool(isatty())
-    except Exception:
-        return False
-
-
 def _level_display(level_label: str, use_symbol_prefix: bool) -> str:
     """Resolve the printable token for a level (colored symbol or text label)."""
 
@@ -1812,10 +1790,10 @@ class LogBar(logging.Logger):
         )
 
         prefix = _level_prefix(level_label, backend_state.supports_ansi, use_symbol_prefix)
-        # Clear any leftover characters from a previous longer line before
-        # moving to the next row; this keeps progress-bar tails from lingering.
-        clear_tail = "\033[K" if backend_state.supports_ansi else ""
-        _print(f"\r{prefix}{rendered_message}{clear_tail}", end='\n', flush=True)
+        # Clear the entire line before writing so characters from a previous
+        # longer line (e.g. progress-bar tails) do not linger.
+        clear_line = "\033[2K" if backend_state.supports_ansi else ""
+        _print(f"\r{clear_line}{prefix}{rendered_message}", end='\n', flush=True)
 
         with _STATE_LOCK:
             last_rendered_length = printable_length

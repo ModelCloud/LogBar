@@ -182,8 +182,8 @@ class TestProgressBar(unittest.TestCase):
         last_line = lines[-1]
         # The visible line (prefix + message + padding) must span the full width.
         self.assertEqual(len(last_line), columns)
-        # ANSI-enabled output should erase any leftover characters before newline.
-        self.assertIn("\033[K", raw)
+        # ANSI-enabled output clears the whole line before writing.
+        self.assertIn("\033[2K", raw)
 
     def test_percent_formatting(self):
         """Support classic printf-style formatting with one positional arg."""
@@ -428,7 +428,7 @@ class TestProgressBar(unittest.TestCase):
                 log.info("message above stack")
 
             delta = buffer.getvalue()[checkpoint:]
-            self.assertNotIn("\033[2K", delta)
+            self.assertIn("\033[2K", delta)
             self.assertIn("\033[1S", delta)
             self.assertNotIn("\033[1L", delta)
             self.assertIn(rows[0].line.ljust(columns), ANSI_ESCAPE_RE.sub('', delta))
