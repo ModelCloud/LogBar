@@ -14,7 +14,12 @@ from enum import Enum
 from functools import lru_cache, wraps
 from typing import Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
-from .terminal import RenderBackendState, render_backend_state, terminal_size
+from .terminal import (
+    RenderBackendState,
+    _env_flag_enabled,
+    render_backend_state,
+    terminal_size,
+)
 from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
 from .coordinator import RenderCoordinator
@@ -1282,7 +1287,86 @@ class LEVEL(str, Enum):
     ERROR = "ERROR"
     CRITICAL = "CRIT"
 
-LEVEL_MAX_LENGTH = 5 # ERROR/DEBUG is longest at 5 chars
+LEVEL_MAX_LENGTH = max(len(level.value) for level in LEVEL)  # longest standard label
+
+LEVEL_SYMBOLS = {
+    "DEBUG": "◆",
+    "INFO": "●",
+    "WARN": "▲",
+    "ERROR": "■",
+    "CRIT": "◉",
+}
+
+
+def _symbol_prefix_default() -> bool:
+    """Return whether the colored symbol prefix should be enabled by default."""
+
+    return not _env_flag_enabled("LOGBAR_DISABLE_SYMBOL_PREFIX")
+
+
+def _terminal_supports_symbols(
+    supports_ansi: bool = False,
+    stream: Optional[object] = None,
+) -> bool:
+    """Best-effort check that the terminal can render colored Unicode symbols."""
+
+    if _env_flag_enabled("LOGBAR_FORCE_SYMBOL_PREFIX"):
+        return True
+    if _env_flag_enabled("LOGBAR_DISABLE_SYMBOL_PREFIX"):
+        return False
+    if not supports_ansi:
+        return False
+
+    if stream is None:
+        stream = sys.stdout
+    isatty = getattr(stream, "isatty", None)
+    try:
+        return bool(isatty())
+    except Exception:
+        return False
+
+
+def _level_display(level_label: str, use_symbol_prefix: bool) -> str:
+    """Resolve the printable token for a level (colored symbol or text label)."""
+
+    if use_symbol_prefix:
+        return LEVEL_SYMBOLS.get(level_label, level_label)
+    return level_label
+
+
+def _level_width(level_label: str, use_symbol_prefix: bool) -> int:
+    """Return the visible width of a log-level prefix before the trailing space."""
+
+    display = _level_display(level_label, use_symbol_prefix)
+    display_width = visible_length(display)
+    if use_symbol_prefix:
+        return max(1, display_width)
+    return max(LEVEL_MAX_LENGTH, display_width)
+
+
+def _level_max_length(use_symbol_prefix: bool) -> int:
+    """Return the widest prefix a table must reserve across all log levels."""
+
+    if use_symbol_prefix:
+        return max(1, max(visible_length(s) for s in LEVEL_SYMBOLS.values()))
+    return LEVEL_MAX_LENGTH
+
+
+@lru_cache(maxsize=64)
+def _level_prefix(level_label: str, supports_ansi: bool, use_symbol_prefix: bool = False) -> str:
+    """Build and cache the colored symbol or colored text log-level prefix."""
+
+    display = _level_display(level_label, use_symbol_prefix)
+    level_width = _level_width(level_label, use_symbol_prefix)
+    display_width = visible_length(display)
+    level_padding = " " * (level_width - display_width)
+
+    if not supports_ansi:
+        return f"{display}{level_padding} "
+
+    color = COLORS.get(level_label, COLORS["RESET"])
+    return f"{color}{display}{COLORS['RESET']}{level_padding} "
+
 
 LEVEL_TO_LOGGING = {
     LEVEL.DEBUG: logging.DEBUG,
@@ -1532,6 +1616,13 @@ class LogBar(logging.Logger):
 
         self.history = set()
         self._history_lock = threading.Lock()
+        self._symbol_prefix = _symbol_prefix_default()
+
+    def set_symbol_prefix(self, enabled: bool = True) -> "LogBar":
+        """Enable or disable colored symbol prefixes in favor of colored text."""
+
+        self._symbol_prefix = bool(enabled)
+        return self
 
     def _normalize_level(self, level: Union[LEVEL, int, str]) -> int:
         """Normalize enum, string, or numeric levels to stdlib integers."""
@@ -1606,13 +1697,20 @@ class LogBar(logging.Logger):
             else:
                 header_defs = list(headers)
 
+        backend_state = _current_render_backend_state()
+        use_symbol = self._symbol_prefix and _terminal_supports_symbols(
+            backend_state.supports_ansi,
+            sys.stdout,
+        )
+        level_max_length = _level_max_length(use_symbol)
+
         return ColumnsPrinter(
             logger=self,
             headers=header_defs,
             padding=padding,
             width_hint=width,
             level_enum=LEVEL,
-            level_max_length=LEVEL_MAX_LENGTH,
+            level_max_length=level_max_length,
             terminal_size_provider=lambda: terminal_size(),
         )
 
@@ -1687,7 +1785,11 @@ class LogBar(logging.Logger):
         backend_state = backend_state or _current_render_backend_state()
         columns = backend_state.columns
         terminal_rows = backend_state.lines
-        level_width = max(LEVEL_MAX_LENGTH, len(level_label))
+        use_symbol_prefix = self._symbol_prefix and _terminal_supports_symbols(
+            backend_state.supports_ansi,
+            sys.stdout,
+        )
+        level_width = _level_width(level_label, use_symbol_prefix)
 
         with _STATE_LOCK:
             previous_render_length = last_rendered_length
@@ -1717,7 +1819,7 @@ class LogBar(logging.Logger):
             backend_state=backend_state,
         )
 
-        prefix = _level_prefix(level_label, backend_state.supports_ansi)
+        prefix = _level_prefix(level_label, backend_state.supports_ansi, use_symbol_prefix)
         _print(f"\r{prefix}{rendered_message}", end='\n', flush=True)
 
         with _STATE_LOCK:

@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import sys
+
 from typing import Callable, Optional, Sequence, Union
 
-from .logbar import LEVEL, LogBar, _RENDER_LOCK, _level_prefix
+from .logbar import LEVEL, LogBar, _RENDER_LOCK, _level_prefix, _terminal_supports_symbols
 from .region import LogRegion
 
 
@@ -132,7 +134,8 @@ class RegionLogBar(LogBar):
 
         del normalized_level, allow_defer, backend_state
 
-        prefix = _level_prefix(level_label, self._supports_ansi)
+        use_symbol_prefix = self._symbol_prefix and _terminal_supports_symbols(self._supports_ansi, sys.stdout)
+        prefix = _level_prefix(level_label, self._supports_ansi, use_symbol_prefix)
         message_lines = str(str_msg).splitlines() or [""]
         for line in message_lines:
             self._region.append_body_line(f"{prefix}{line}")
