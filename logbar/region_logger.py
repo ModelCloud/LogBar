@@ -45,6 +45,16 @@ class RegionLogBar(LogBar):
 
         return self._supports_ansi
 
+    def _resolve_symbol_prefix(self, backend_state=None) -> bool:
+        """Resolve symbol mode from this region's own ANSI capability.
+
+        Region output is not tied to process ``sys.stdout``; the screen/host
+        that renders the region decides ANSI support.  The ``backend_state``
+        parameter is accepted for signature compatibility but ignored here.
+        """
+
+        return self._symbol_prefix and self._supports_ansi
+
     def set_on_change(self, callback: Optional[Callable[["RegionLogBar"], None]]) -> "RegionLogBar":
         """Install or remove the callback invoked after region mutations."""
 
@@ -132,7 +142,8 @@ class RegionLogBar(LogBar):
 
         del normalized_level, allow_defer, backend_state
 
-        prefix = _level_prefix(level_label, self._supports_ansi)
+        use_symbol_prefix = self._resolve_symbol_prefix()
+        prefix = _level_prefix(level_label, self._supports_ansi, use_symbol_prefix)
         message_lines = str(str_msg).splitlines() or [""]
         for line in message_lines:
             self._region.append_body_line(f"{prefix}{line}")

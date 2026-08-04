@@ -165,6 +165,26 @@ class TestProgressBar(unittest.TestCase):
         self.assertIn("plain stream log", output)
         self.assertNotIn("\033[", output)
 
+    def test_log_line_fills_terminal_width_with_ansi(self):
+        """Pad emitted log lines to the terminal width and clear the rest of the line."""
+
+        columns = 80
+        stdout = io.StringIO()
+
+        with mock.patch('sys.stdout', stdout), \
+             mock.patch('logbar.logbar.terminal_size', return_value=(columns, 24)), \
+             mock.patch.dict('logbar.terminal.os.environ', {"LOGBAR_FORCE_ANSI": "1"}, clear=True):
+            log.info("fill width")
+
+        raw = stdout.getvalue()
+        lines = extract_rendered_lines(raw)
+        self.assertTrue(lines)
+        last_line = lines[-1]
+        # The visible line (prefix + message + padding) must span the full width.
+        self.assertEqual(len(last_line), columns)
+        # ANSI-enabled output clears the whole line before writing.
+        self.assertIn("\033[2K", raw)
+
     def test_percent_formatting(self):
         """Support classic printf-style formatting with one positional arg."""
 
@@ -408,7 +428,7 @@ class TestProgressBar(unittest.TestCase):
                 log.info("message above stack")
 
             delta = buffer.getvalue()[checkpoint:]
-            self.assertNotIn("\033[2K", delta)
+            self.assertIn("\033[2K", delta)
             self.assertIn("\033[1S", delta)
             self.assertNotIn("\033[1L", delta)
             self.assertIn(rows[0].line.ljust(columns), ANSI_ESCAPE_RE.sub('', delta))

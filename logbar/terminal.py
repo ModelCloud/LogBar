@@ -25,6 +25,7 @@ class RenderBackendState:
     supports_cursor: bool
     supports_ansi: bool
     supports_styling: bool
+    supports_symbols: bool = False
     headless: bool = False
 
 
@@ -279,12 +280,23 @@ def render_backend_state(
 
     headless = _is_headless_environment(notebook=notebook)
 
-    # A headless backend should never claim cursor/ANSI support; the flag is
-    # the canonical signal used by the rest of the renderer to suppress draws.
+    # A headless backend should never claim cursor support. ANSI color and
+    # styling are still honored when the user explicitly forces them.
     if headless:
         supports_cursor = False
-        supports_ansi = False
-        supports_styling = False
+        if not force_ansi:
+            supports_ansi = False
+            supports_styling = False
+        # Notebooks always render through the notebook path and do not use
+        # terminal styling/cursor state, even when a force-color flag is set.
+        if notebook:
+            supports_styling = False
+
+    # Symbol prefixes require color support plus either a real TTY or an
+    # explicit force flag; they are not a notebook concept.
+    supports_symbols = supports_ansi and (
+        _env_flag_enabled("LOGBAR_FORCE_SYMBOL_PREFIX") or _is_stream_tty(target)
+    )
 
     return RenderBackendState(
         columns=max(0, int(columns)),
@@ -294,5 +306,6 @@ def render_backend_state(
         supports_cursor=supports_cursor,
         supports_ansi=supports_ansi,
         supports_styling=supports_styling,
+        supports_symbols=supports_symbols,
         headless=headless,
     )

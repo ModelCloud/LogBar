@@ -1076,7 +1076,10 @@ class ProgressBar:
         if not self._attached or render_fn is None:
             with context:
                 try:
-                    print(f'\r{rendered_line}', end='', flush=True)
+                    # Clear the whole line before drawing the new inline frame
+                    # so characters from a previous longer frame do not linger.
+                    clear_line = "\033[2K" if backend_state.supports_ansi else ""
+                    print(f'\r{clear_line}{rendered_line}', end='', flush=True)
                 except Exception:
                     if not sys.is_finalizing():
                         raise

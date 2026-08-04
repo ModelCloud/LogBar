@@ -96,14 +96,50 @@ class TestHeadlessDetection(unittest.TestCase):
         with patch.dict("logbar.terminal.os.environ", {"TERM": "dumb"}, clear=True):
             self.assertTrue(_is_headless_environment())
 
+    def test_headless_honors_force_ansi(self):
+        """``LOGBAR_FORCE_ANSI=1`` still enables ANSI color in headless backends."""
+
+        class NonTTYStream:
+            def isatty(self):
+                return False
+
+        with patch.dict(
+            "logbar.terminal.os.environ",
+            {"CI": "1", "LOGBAR_FORCE_ANSI": "1"},
+            clear=True,
+        ):
+            state = render_backend_state(stream=NonTTYStream(), size_provider=lambda: (80, 24))
+
+        self.assertTrue(state.headless)
+        self.assertTrue(state.supports_ansi)
+        self.assertTrue(state.supports_styling)
+        self.assertFalse(state.supports_cursor)
+
     def test_notebook_backend_is_headless(self):
         """The backend state reports ``headless=True`` for notebook targets."""
 
-        state = render_backend_state(notebook=True)
+        with patch.dict("logbar.terminal.os.environ", {}, clear=True):
+            state = render_backend_state(notebook=True)
         self.assertTrue(state.headless)
         self.assertFalse(state.supports_cursor)
         self.assertFalse(state.supports_ansi)
         self.assertFalse(state.supports_styling)
+        self.assertFalse(state.supports_symbols)
+
+    def test_notebook_backend_ignores_force_color_for_styling(self):
+        """Notebooks do not claim terminal styling support even with FORCE_COLOR set."""
+
+        with patch.dict(
+            "logbar.terminal.os.environ",
+            {"FORCE_COLOR": "1"},
+            clear=True,
+        ):
+            state = render_backend_state(notebook=True)
+
+        self.assertTrue(state.headless)
+        self.assertFalse(state.supports_ansi)
+        self.assertFalse(state.supports_styling)
+        self.assertFalse(state.supports_cursor)
 
     def test_plain_terminal_is_not_headless(self):
         """A clean, non-CI, non-agent environment is not headless."""
@@ -190,7 +226,7 @@ log = LogBar.shared()
 log = LogBar.shared()  # second call should be idempotent
 out = sys.stdout.getvalue()
 # The single log line should appear exactly once.
-print("COUNT", out.count("high-frequency progress bars"), file=sys.stderr)
+print("COUNT", out.count("headless/CI mode"), file=sys.stderr)
 """
         env = {
             "PATH": os.environ.get("PATH", ""),
