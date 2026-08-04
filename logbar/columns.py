@@ -433,7 +433,9 @@ class ColumnsPrinter:
         slot_count = self._slot_count()
         separator_count = slot_count + 1 if slot_count else 0
 
-        available_total = max(0, term_cols - (self._level_max_length + 2))
+        # The logger reserves one trailing space after the level prefix, so the
+        # table row budget is terminal width minus the prefix, not minus two.
+        available_total = max(0, term_cols - (self._level_max_length + 1))
 
         if hint:
             if hint[0] == "percent":

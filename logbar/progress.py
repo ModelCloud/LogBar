@@ -1076,7 +1076,10 @@ class ProgressBar:
         if not self._attached or render_fn is None:
             with context:
                 try:
-                    print(f'\r{rendered_line}', end='', flush=True)
+                    # Erase any trailing characters left from a previous,
+                    # longer inline frame before printing the new one.
+                    clear_tail = "\033[K" if backend_state.supports_ansi else ""
+                    print(f'\r{rendered_line}{clear_tail}', end='', flush=True)
                 except Exception:
                     if not sys.is_finalizing():
                         raise

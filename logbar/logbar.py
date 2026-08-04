@@ -1788,7 +1788,9 @@ class LogBar(logging.Logger):
         line_length = level_width + 1 + message_width
 
         if columns > 0:
-            padding_needed = max(0, columns - level_width - 2 - message_width)
+            # The prefix already includes one trailing space, so pad only to
+            # fill the remaining terminal width.
+            padding_needed = max(0, columns - level_width - 1 - message_width)
             rendered_message = f"{str_msg}{' ' * padding_needed}"
             printable_length = columns
         else:
@@ -1810,7 +1812,10 @@ class LogBar(logging.Logger):
         )
 
         prefix = _level_prefix(level_label, backend_state.supports_ansi, use_symbol_prefix)
-        _print(f"\r{prefix}{rendered_message}", end='\n', flush=True)
+        # Clear any leftover characters from a previous longer line before
+        # moving to the next row; this keeps progress-bar tails from lingering.
+        clear_tail = "\033[K" if backend_state.supports_ansi else ""
+        _print(f"\r{prefix}{rendered_message}{clear_tail}", end='\n', flush=True)
 
         with _STATE_LOCK:
             last_rendered_length = printable_length
