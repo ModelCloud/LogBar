@@ -1329,7 +1329,9 @@ def _level_prefix(level_label: str, supports_ansi: bool, use_symbol_prefix: bool
     if not supports_ansi:
         return f"{display}{level_padding} "
 
-    color = COLORS.get(level_label, COLORS["RESET"])
+    # Unknown labels in symbol mode get the INFO color so the glyph is visible.
+    default_color = COLORS["INFO"] if use_symbol_prefix else COLORS["RESET"]
+    color = COLORS.get(level_label, default_color)
     return f"{color}{display}{COLORS['RESET']}{level_padding} "
 
 
@@ -1768,7 +1770,8 @@ class LogBar(logging.Logger):
 
         if columns > 0:
             # The prefix already includes one trailing space, so pad only to
-            # fill the remaining terminal width.
+            # fill the remaining terminal width. \033[2K before writing clears
+            # any leftover characters from a previous longer line.
             padding_needed = max(0, columns - level_width - 1 - message_width)
             rendered_message = f"{str_msg}{' ' * padding_needed}"
             printable_length = columns

@@ -46,7 +46,12 @@ class RegionLogBar(LogBar):
         return self._supports_ansi
 
     def _resolve_symbol_prefix(self, backend_state=None) -> bool:
-        """Resolve symbol mode from this region's own ANSI capability."""
+        """Resolve symbol mode from this region's own ANSI capability.
+
+        Region output is not tied to process ``sys.stdout``; the screen/host
+        that renders the region decides ANSI support.  The ``backend_state``
+        parameter is accepted for signature compatibility but ignored here.
+        """
 
         return self._symbol_prefix and self._supports_ansi
 
