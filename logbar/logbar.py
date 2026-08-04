@@ -1287,11 +1287,11 @@ class LEVEL(str, Enum):
 LEVEL_MAX_LENGTH = max(len(level.value) for level in LEVEL)  # longest standard label
 
 LEVEL_SYMBOLS = {
-    "DEBUG": "◆",
-    "INFO": "⬤",
-    "WARN": "▲",
+    "DEBUG": "■",
+    "INFO": "■",
+    "WARN": "■",
     "ERROR": "■",
-    "CRIT": "◉",
+    "CRIT": "■",
 }
 
 
