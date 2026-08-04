@@ -118,11 +118,28 @@ class TestHeadlessDetection(unittest.TestCase):
     def test_notebook_backend_is_headless(self):
         """The backend state reports ``headless=True`` for notebook targets."""
 
-        state = render_backend_state(notebook=True)
+        with patch.dict("logbar.terminal.os.environ", {}, clear=True):
+            state = render_backend_state(notebook=True)
         self.assertTrue(state.headless)
         self.assertFalse(state.supports_cursor)
         self.assertFalse(state.supports_ansi)
         self.assertFalse(state.supports_styling)
+        self.assertFalse(state.supports_symbols)
+
+    def test_notebook_backend_ignores_force_color_for_styling(self):
+        """Notebooks do not claim terminal styling support even with FORCE_COLOR set."""
+
+        with patch.dict(
+            "logbar.terminal.os.environ",
+            {"FORCE_COLOR": "1"},
+            clear=True,
+        ):
+            state = render_backend_state(notebook=True)
+
+        self.assertTrue(state.headless)
+        self.assertFalse(state.supports_ansi)
+        self.assertFalse(state.supports_styling)
+        self.assertFalse(state.supports_cursor)
 
     def test_plain_terminal_is_not_headless(self):
         """A clean, non-CI, non-agent environment is not headless."""

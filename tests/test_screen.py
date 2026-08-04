@@ -199,6 +199,6 @@ class TestRegionScreen(unittest.TestCase):
 
         rows = screen.render()
 
-        self.assertEqual(rows, ["INFO  hello         "])
-        self.assertEqual(stream.getvalue(), "INFO  hello         \n")
+        self.assertEqual(rows, ["◼ hello             "])
+        self.assertEqual(stream.getvalue(), "◼ hello             \n")
         self.assertNotIn("\033[", stream.getvalue())
