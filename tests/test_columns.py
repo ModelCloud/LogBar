@@ -228,6 +228,9 @@ def test_columns_respects_available_width():
         buffer = io.StringIO()
         with redirect_stdout(buffer):
             cols.info.header()
+            # Evaluate the level-prefix budget inside the same stdout context
+            # used to render the header so the expected width matches the row.
+            expected = columns - (cols._get_level_max_length() + 1)
 
     cleaned = _clean(buffer.getvalue())
     header_lines = [line for line in cleaned.splitlines() if '|  c1' in line]
@@ -237,7 +240,6 @@ def test_columns_respects_available_width():
     row_segment = header_line[header_line.index('|'):]
     # The logger reserves one trailing space after the level prefix, so the
     # row budget is terminal width minus the prefix.
-    expected = columns - (cols._get_level_max_length() + 1)
     segment_len = len(row_segment)
     content_segment = row_segment[: row_segment.rfind('|') + 1]
     slot_widths = cols.widths
