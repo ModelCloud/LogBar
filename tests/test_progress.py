@@ -233,6 +233,7 @@ class TestProgress(unittest.TestCase):
             "pb = ProgressBar(range(1)).manual()\n"
             "sys.stdout = SimpleNamespace(isatty=lambda: True, write=lambda *_: None, flush=lambda: None)\n"
             "sys.__stdout__.write('1\\n' if pb._should_animate_title() else '0\\n')\n"
+            "sys.__stdout__.flush()\n"
         )
 
         enabled = subprocess.run(
@@ -314,7 +315,8 @@ class TestProgress(unittest.TestCase):
         pb.current_iter_step = 50
 
         columns = 120
-        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)), \
+             patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
             buffer = StringIO()
             with redirect_stdout(buffer):
                 pb.draw()
@@ -333,7 +335,8 @@ class TestProgress(unittest.TestCase):
         pb.current_iter_step = 50
 
         columns = 80
-        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)), \
+             patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
             buffer = StringIO()
             with redirect_stdout(buffer):
                 pb.draw()
