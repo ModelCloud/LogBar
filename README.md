@@ -46,15 +46,29 @@ The glyph is colored by level: cyan for `DEBUG`, green for `INFO`, yellow for
 `WARN`, and red for `ERROR` and `CRIT`. This keeps tables aligned while still
 making severity visible at a glance.
 
-| Level | Glyph color | ANSI prefix representation |
+| Level | README visual key | Terminal glyph color |
 | --- | --- | --- |
-| `DEBUG` | cyan | `\x1b[36m◼\x1b[0m` |
-| `INFO` | green | `\x1b[32m◼\x1b[0m` |
-| `WARN` | yellow | `\x1b[33m◼\x1b[0m` |
-| `ERROR` / `CRIT` | red | `\x1b[31m◼\x1b[0m` |
+| `DEBUG` | 🔵 `◼` | cyan |
+| `INFO` | 🟢 `◼` | green |
+| `WARN` | 🟡 `◼` | yellow |
+| `ERROR` / `CRIT` | 🔴 `◼` | red |
 
-The escaped sequences above are what an ANSI terminal interprets as color;
-GitHub Markdown displays the sample glyphs without terminal color.
+The colored circle is a README-only visual key; the adjacent `◼` is the exact
+glyph LogBar emits. GitHub repository Markdown cannot apply terminal ANSI
+colors directly to text, so the rendered color is visible in the emoji key.
+
+<details>
+<summary>ANSI sequences emitted by the terminal renderer</summary>
+
+```text
+DEBUG  \x1b[36m◼\x1b[0m
+INFO   \x1b[32m◼\x1b[0m
+WARN   \x1b[33m◼\x1b[0m
+ERROR  \x1b[31m◼\x1b[0m
+CRIT   \x1b[31m◼\x1b[0m
+```
+
+</details>
 
 When output is redirected, headless, or color-disabled, LogBar automatically
 falls back to text prefixes such as `INFO`, `WARN`, and `ERROR`. Disable glyphs
