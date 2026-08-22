@@ -233,6 +233,7 @@ class TestProgress(unittest.TestCase):
             "pb = ProgressBar(range(1)).manual()\n"
             "sys.stdout = SimpleNamespace(isatty=lambda: True, write=lambda *_: None, flush=lambda: None)\n"
             "sys.__stdout__.write('1\\n' if pb._should_animate_title() else '0\\n')\n"
+            "sys.__stdout__.flush()\n"
         )
 
         enabled = subprocess.run(

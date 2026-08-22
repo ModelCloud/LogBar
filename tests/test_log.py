@@ -355,7 +355,8 @@ class TestProgressBar(unittest.TestCase):
         buffer = TTYBuffer()
 
         try:
-            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+            with mock.patch.dict("logbar.terminal.os.environ", {"LOGBAR_FORCE_ANSI": "1"}, clear=True), \
+                 mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
                  mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
                  mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
                  redirect_stdout(buffer):
@@ -416,7 +417,8 @@ class TestProgressBar(unittest.TestCase):
         buffer = TTYBuffer()
 
         try:
-            with mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
+            with mock.patch.dict("logbar.terminal.os.environ", {"LOGBAR_FORCE_ANSI": "1"}, clear=True), \
+                 mock.patch.object(logbar_module, "_should_refresh_in_background", return_value=False), \
                  mock.patch.object(logbar_module, "_ensure_background_refresh_thread", return_value=None), \
                  mock.patch.object(logbar_module, "terminal_size", return_value=(columns, 24)), \
                  redirect_stdout(buffer):
@@ -948,8 +950,12 @@ class TestProgressBar(unittest.TestCase):
             )
 
             command = f"{shlex.quote(pytest_bin)} -s -v {shlex.quote(str(repro_path))}"
+            if sys.platform == "darwin":
+                script_command = [script_bin, "-q", str(transcript_path), "sh", "-c", command]
+            else:
+                script_command = [script_bin, "-q", "-c", command, str(transcript_path)]
             completed = subprocess.run(
-                [script_bin, "-q", "-c", command, str(transcript_path)],
+                script_command,
                 cwd=str(REPO_ROOT),
                 env=env,
                 capture_output=True,
