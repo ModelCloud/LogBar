@@ -46,6 +46,16 @@ The glyph is colored by level: cyan for `DEBUG`, green for `INFO`, yellow for
 `WARN`, and red for `ERROR` and `CRIT`. This keeps tables aligned while still
 making severity visible at a glance.
 
+| Level | Glyph color | ANSI prefix representation |
+| --- | --- | --- |
+| `DEBUG` | cyan | `\x1b[36m◼\x1b[0m` |
+| `INFO` | green | `\x1b[32m◼\x1b[0m` |
+| `WARN` | yellow | `\x1b[33m◼\x1b[0m` |
+| `ERROR` / `CRIT` | red | `\x1b[31m◼\x1b[0m` |
+
+The escaped sequences above are what an ANSI terminal interprets as color;
+GitHub Markdown displays the sample glyphs without terminal color.
+
 When output is redirected, headless, or color-disabled, LogBar automatically
 falls back to text prefixes such as `INFO`, `WARN`, and `ERROR`. Disable glyphs
 for a logger with `log.set_symbol_prefix(False)`, or set
