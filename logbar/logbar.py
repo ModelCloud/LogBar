@@ -69,6 +69,7 @@ def _print(*args, **kwargs) -> None:
 _notebook_display_handle = None
 _notebook_plain_last_line: Optional[str] = None
 _notebook_plain_last_width = 0
+_notebook_plain_stream = None
 
 
 def _current_render_backend_state(columns_hint: Optional[int] = None) -> RenderBackendState:
@@ -237,7 +238,15 @@ def _notebook_render_stack(lines: Sequence[str]) -> bool:
 def _notebook_render_plain_stdout(lines: Sequence[str], *, strip_styles: bool = False) -> None:
     """Fallback notebook-friendly rendering using carriage returns only."""
 
-    global _notebook_plain_last_line, _notebook_plain_last_width
+    global _notebook_plain_last_line, _notebook_plain_last_width, _notebook_plain_stream
+
+    # Width bookkeeping belongs to one output stream. Reusing the previous
+    # stream's erase width can append stale clearing spaces to a new capture
+    # stream after a redirect or terminal-size change.
+    if sys.stdout is not _notebook_plain_stream:
+        _notebook_plain_stream = sys.stdout
+        _notebook_plain_last_line = None
+        _notebook_plain_last_width = 0
 
     if strip_styles:
         lines = [strip_ansi(line) for line in lines]

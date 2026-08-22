@@ -107,11 +107,12 @@ def test_columns_simulate_updates_width_without_output():
 
     long_value = "longer than anything real"
 
-    with mock.patch.object(cols._logger, "_process") as mocked:
+    with mock.patch.object(cols, "_terminal_size", return_value=(80, 24)), \
+         mock.patch.object(cols._logger, "_process") as mocked:
         cols.info.simulate(long_value, "ok")
         mocked.assert_not_called()
 
-    cols.info("short", "value")
+        cols.info("short", "value")
 
     widths = cols.widths
     assert widths

@@ -315,7 +315,8 @@ class TestProgress(unittest.TestCase):
         pb.current_iter_step = 50
 
         columns = 120
-        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)), \
+             patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
             buffer = StringIO()
             with redirect_stdout(buffer):
                 pb.draw()
@@ -334,7 +335,8 @@ class TestProgress(unittest.TestCase):
         pb.current_iter_step = 50
 
         columns = 80
-        with patch('logbar.progress.terminal_size', return_value=(columns, 24)):
+        with patch('logbar.progress.terminal_size', return_value=(columns, 24)), \
+             patch('logbar.logbar.terminal_size', return_value=(columns, 24)):
             buffer = StringIO()
             with redirect_stdout(buffer):
                 pb.draw()

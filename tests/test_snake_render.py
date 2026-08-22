@@ -626,7 +626,12 @@ class TestSnakeRender(unittest.TestCase):
 
         duration_seconds = 15.0
         board = SnakeBoard(width=18, height=6, initial_length=5)
-        elapsed, raw = self._run_snake_session(board, duration_seconds=duration_seconds, fps=30)
+        elapsed, raw = self._run_snake_session(
+            board,
+            duration_seconds=duration_seconds,
+            fps=30,
+            terminal_size_provider=lambda: (80, max(board.render_height + 2, 8)),
+        )
 
         lines = extract_rendered_lines(raw)
         screen = replay_terminal_screen(raw, screen_height=board.render_height)
