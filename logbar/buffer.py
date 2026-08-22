@@ -14,7 +14,6 @@ import threading
 import weakref
 from typing import Optional, Tuple
 
-
 QueueItem = Tuple[str, Optional[str], Optional[threading.Event]]
 
 _CACHE_LOCK = threading.Lock()
@@ -27,9 +26,20 @@ class QueueingStdout:
     def __init__(self, stream: object):
         """Wrap an unbuffered-like stream so writes are serialized off-thread."""
 
-        self._stream = stream
+        try:
+            self._stream_ref: Optional[weakref.ReferenceType[object]] = weakref.ref(stream)  # type: ignore[arg-type]
+        except TypeError:
+            self._stream_ref = None
+            self._stream = stream
+        else:
+            self._stream = None
+            # The cache retains wrappers, so release the worker and wrapper's
+            # stream reference when a weak-referenceable stream is collected.
+            weakref.finalize(stream, self.close)
         self._queue: "queue.Queue[QueueItem]" = queue.Queue()
         self._closed = False
+        self._state_lock = threading.Lock()
+        self._close_event: Optional[threading.Event] = None
         self._logbar_queue_wrapped = True
         self._worker = threading.Thread(
             target=self._drain_worker,
@@ -38,11 +48,18 @@ class QueueingStdout:
         )
         self._worker.start()
 
+    def _target_stream(self) -> object:
+        """Return the wrapped stream, failing clearly if it was collected."""
+
+        if self._stream_ref is not None:
+            stream = self._stream_ref()
+            if stream is None:
+                raise ValueError("underlying stream has been collected")
+            return stream
+        return self._stream
+
     def write(self, data):  # type: ignore[override]
         """Queue a write and return the character count immediately."""
-
-        if self._closed:
-            raise ValueError("I/O operation on closed file.")
 
         if not isinstance(data, str):
             data = str(data)
@@ -50,7 +67,10 @@ class QueueingStdout:
         if not data:
             return 0
 
-        self._queue.put(("write", data, None))
+        with self._state_lock:
+            if self._closed:
+                raise ValueError("I/O operation on closed file.")
+            self._queue.put(("write", data, None))
         return len(data)
 
     def writelines(self, lines):  # type: ignore[override]
@@ -62,34 +82,41 @@ class QueueingStdout:
     def flush(self):  # type: ignore[override]
         """Block until queued writes are flushed to the wrapped stream."""
 
-        if self._closed:
-            raise ValueError("flush of closed file")
-
         event = threading.Event()
-        self._queue.put(("flush", None, event))
+        with self._state_lock:
+            if self._closed:
+                raise ValueError("flush of closed file")
+            self._queue.put(("flush", None, event))
         event.wait()
 
     def close(self):  # type: ignore[override]
         """Drain pending output and stop the worker thread."""
 
-        if self._closed:
-            return
-
-        event = threading.Event()
-        self._queue.put(("close", None, event))
+        with self._state_lock:
+            if self._closed:
+                event = self._close_event
+                if event is None:
+                    return
+            else:
+                # Mark closed before queueing the sentinel so no later write or
+                # flush can be placed behind the worker's shutdown request.
+                self._closed = True
+                event = threading.Event()
+                self._close_event = event
+                self._queue.put(("close", None, event))
         event.wait()
-        self._closed = True
 
     @property
     def closed(self):  # type: ignore[override]
         """Mirror the standard file-like `closed` attribute."""
 
-        return self._closed
+        with self._state_lock:
+            return self._closed
 
     def fileno(self):  # type: ignore[override]
         """Expose `fileno()` when the wrapped stream supports it."""
 
-        fileno = getattr(self._stream, "fileno", None)
+        fileno = getattr(self._target_stream(), "fileno", None)
         if callable(fileno):
             return fileno()
         raise AttributeError("underlying stream does not provide fileno")
@@ -97,7 +124,7 @@ class QueueingStdout:
     def isatty(self):  # type: ignore[override]
         """Delegate TTY detection to the wrapped stream when possible."""
 
-        method = getattr(self._stream, "isatty", None)
+        method = getattr(self._target_stream(), "isatty", None)
         if callable(method):
             return method()
         return False
@@ -105,7 +132,7 @@ class QueueingStdout:
     def readable(self):  # type: ignore[override]
         """Mirror the wrapped stream readability capability."""
 
-        method = getattr(self._stream, "readable", None)
+        method = getattr(self._target_stream(), "readable", None)
         if callable(method):
             return method()
         return False
@@ -118,7 +145,7 @@ class QueueingStdout:
     def seekable(self):  # type: ignore[override]
         """Mirror the wrapped stream seekability when available."""
 
-        method = getattr(self._stream, "seekable", None)
+        method = getattr(self._target_stream(), "seekable", None)
         if callable(method):
             return method()
         return False
@@ -132,18 +159,19 @@ class QueueingStdout:
             try:
                 if action == "write":
                     if payload:
-                        self._stream.write(payload)
-                        flush = getattr(self._stream, "flush", None)
+                        stream = self._target_stream()
+                        stream.write(payload)
+                        flush = getattr(stream, "flush", None)
                         if callable(flush):
                             flush()
                 elif action == "flush":
-                    flush = getattr(self._stream, "flush", None)
+                    flush = getattr(self._target_stream(), "flush", None)
                     if callable(flush):
                         flush()
                     if event is not None:
                         event.set()
                 elif action == "close":
-                    flush = getattr(self._stream, "flush", None)
+                    flush = getattr(self._target_stream(), "flush", None)
                     if callable(flush):
                         flush()
                     if event is not None:
@@ -152,15 +180,23 @@ class QueueingStdout:
             except Exception:
                 if event is not None:
                     event.set()
+                if action == "close":
+                    break
                 continue
 
             if event is not None and action not in {"flush", "close"}:
                 event.set()
 
+            # Do not retain a stream through the blocking queue.get() call;
+            # otherwise a worker can keep a short-lived redirected stream alive
+            # even though the wrapper only stores a weak reference to it.
+            stream = None
+            flush = None
+
     def __getattr__(self, item):
         """Fall back to the wrapped stream for unknown attributes."""
 
-        return getattr(self._stream, item)
+        return getattr(self._target_stream(), item)
 
 
 def _stdout_is_buffered(stream: object) -> bool:
@@ -197,14 +233,25 @@ def get_buffered_stdout(stream: Optional[object] = None) -> object:
         cached = _CACHED_WRAPPERS.get(base_id)
         if cached is not None:
             base_ref, wrapper = cached
-            if base_ref is None or base_ref() is base:
+            cached_base = base_ref() if base_ref is not None else None
+            if base_ref is None or cached_base is base:
                 if not wrapper.closed:
                     return wrapper
+                _CACHED_WRAPPERS.pop(base_id, None)
+            elif cached_base is None:
                 _CACHED_WRAPPERS.pop(base_id, None)
 
         wrapper = QueueingStdout(base)
         try:
-            base_ref = weakref.ref(base)  # type: ignore[arg-type]
+            def _evict(_ref, *, stream_id=base_id) -> None:
+                """Drop a cached wrapper when its underlying stream is gone."""
+
+                with _CACHE_LOCK:
+                    cached_entry = _CACHED_WRAPPERS.get(stream_id)
+                    if cached_entry is not None and cached_entry[0] is _ref:
+                        _CACHED_WRAPPERS.pop(stream_id, None)
+
+            base_ref = weakref.ref(base, _evict)  # type: ignore[arg-type]
         except TypeError:
             base_ref = None
         _CACHED_WRAPPERS[base_id] = (base_ref, wrapper)

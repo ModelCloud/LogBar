@@ -7,13 +7,17 @@
 
 from __future__ import annotations
 
+import gc
+import io
 import os
 import queue
 import sys
 import threading
 import unittest
+import weakref
 from unittest import mock
 
+from logbar.buffer import QueueingStdout, get_buffered_stdout
 from logbar.columns import ColumnsPrinter
 from logbar.logbar import LEVEL
 from logbar.progress import ProgressBar, ProgressStyle
@@ -163,6 +167,51 @@ class TestThreadSafety(unittest.TestCase):
         self.assertTrue(errors.empty(), list(errors.queue))
         self.assertIn("mono", ProgressBar.available_styles())
 
+    def test_queueing_stdout_concurrent_close_is_idempotent(self):
+        """Concurrent close calls must all observe the same completed shutdown."""
+
+        wrapped = QueueingStdout(io.StringIO())
+        errors: "queue.Queue[BaseException]" = queue.Queue()
+
+        def close_wrapper() -> None:
+            try:
+                wrapped.close()
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                errors.put(exc)
+
+        threads = [threading.Thread(target=close_wrapper) for _ in range(12)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertTrue(errors.empty(), list(errors.queue))
+        self.assertTrue(wrapped.closed)
+
+    def test_queueing_stdout_does_not_retain_collected_stream(self):
+        """Cached wrappers must not keep short-lived output streams alive."""
+
+        class UnbufferedStream:
+            def write(self, data):
+                return len(data)
+
+            def flush(self):
+                return None
+
+        stream = UnbufferedStream()
+        stream_ref = weakref.ref(stream)
+        wrapped = get_buffered_stdout(stream)
+        self.assertIsInstance(wrapped, QueueingStdout)
+        wrapped.write("payload")
+        wrapped.flush()
+
+        del stream
+        gc.collect()
+
+        self.assertIsNone(stream_ref())
+        self.assertTrue(wrapped.closed)
+
     def test_columns_printer_updates_and_renders_can_overlap(self):
         """Column width bookkeeping should stay coherent under concurrent calls."""
 
@@ -171,7 +220,7 @@ class TestThreadSafety(unittest.TestCase):
             logger=logger,
             headers=("task", "state"),
             level_enum=LEVEL,
-            level_max_length=5,
+            level_max_length_provider=lambda: 5,
             terminal_size_provider=lambda: (60, 10),
         )
         errors: "queue.Queue[BaseException]" = queue.Queue()
