@@ -18,7 +18,7 @@
 
 # Features
 
-- Shared singleton logger with per-level colorized output.
+- Shared singleton logger with automatic per-level colorized `◼` glyph prefixes on interactive ANSI terminals.
 - `once` helpers prevent duplicate log spam automatically.
 - Stackable progress bars that stay anchored while your logs flow freely.
 - Sub-cell Unicode bar rasterization for smoother, more accurate terminal fills.
@@ -38,6 +38,20 @@ pip install logbar
 ```
 
 LogBar works out-of-the-box with CPython 3.8+ on Linux, macOS, and Windows terminals.
+
+## Automatic level glyphs
+
+On an interactive ANSI terminal, LogBar uses a compact `◼` prefix by default.
+The glyph is colored by level: cyan for `DEBUG`, green for `INFO`, yellow for
+`WARN`, and red for `ERROR` and `CRIT`. This keeps tables aligned while still
+making severity visible at a glance.
+
+When output is redirected, headless, or color-disabled, LogBar automatically
+falls back to text prefixes such as `INFO`, `WARN`, and `ERROR`. Disable glyphs
+for a logger with `log.set_symbol_prefix(False)`, or set
+`LOGBAR_DISABLE_SYMBOL_PREFIX=1` before creating the logger. To explicitly use
+glyphs on a redirected stream, set both `LOGBAR_FORCE_ANSI=1` and
+`LOGBAR_FORCE_SYMBOL_PREFIX=1`.
 
 ## Renderer Design
 
@@ -98,7 +112,7 @@ with RegionScreenSession.columns("left", rows("right_top", "right_bottom")) as u
     right_bottom.set_footer_lines(["gpu warmup", "epoch 1/8"])
 ```
 
-Plain-text sketch:
+Plain-text sketch (this example explicitly disables ANSI in the pane loggers):
 
 ```text
 +----------------------+----------------------+
@@ -125,12 +139,11 @@ for _ in log.pb(range(5)):
     time.sleep(0.2)
 ```
 
-Sample output (colors omitted in plain-text view):
+Sample output after stripping ANSI color codes from an interactive terminal:
 
 ```
-INFO  hello from logbar
-INFO  this line shows once
-INFO  [###---------------]  20%  (1/5)
+◼ hello from logbar
+◼ this line shows once
 ```
 
 # Logging
@@ -152,13 +165,21 @@ log.setLevel("ERROR")
 log.setLevel(LogBar.WARNING)   # alias to logging.WARNING
 ```
 
-Typical mixed-level output (Note: Markdown cannot display ANSI colors):
+Typical mixed-level output after stripping ANSI color codes:
 
 ```
-DEBUG model version=v2.9.1
-WARN  disk space is low (5%)
-ERROR cannot connect to database
-CRIT  fuse blown, shutting down
+◼ model version=v2.9.1       # DEBUG, cyan
+◼ disk space is low (5%)     # WARN, yellow
+◼ cannot connect to database  # ERROR, red
+◼ fuse blown, shutting down   # CRIT, red
+```
+
+Use `log.set_symbol_prefix(False)` when the level names should remain visible
+in every output mode:
+
+```py
+log.set_symbol_prefix(False)
+log.info("text prefix enabled")  # INFO text prefix enabled
 ```
 
 # Progress Bars
@@ -195,10 +216,10 @@ for job in pb:
     log.info(f"finished {job}")
 ```
 
-Progress bar snapshot (plain-text example):
+Progress bar snapshot (the live progress row has no log-level prefix):
 
 ```
-INFO  Processing [##########------------]  40%  (8/20) in-flight: step-8
+Downloading [2 of 5] ███████████████▌░░░░░░░░░░░░░░░░░░░░░░░| 0:00:00 / 0:00:00 [2/5] 40.0%
 ```
 
 The bar always re-renders at the bottom, so log lines never overwrite your progress.
@@ -239,8 +260,8 @@ pb_fetch.close()
 Sample stacked output (plain-text view):
 
 ```
-INFO  Fetch  [███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░] |  58.8% 00:00:46 / 00:01:19
-INFO  Train  [█████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] |  37.5% 00:01:15 / 00:03:20
+Fetch [12 of 20] █████████████████████░░░░░░░░░░░░░░| 0:00:00 / 0:00:00 [12/20] 60.0%
+Train [7 of 20] ████████████▉░░░░░░░░░░░░░░░░░░░░░░░░| 0:00:00 / 0:00:00 [7/20] 35.0%
 ```
 
 ## Progress Bar Styling
@@ -283,7 +304,7 @@ ProgressBar.set_default_style("ice")
 Styled output (plain-text view with ANSI removed):
 
 ```
-INFO  Upload  [▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉···········] |  62.0% 00:01:48 / 00:02:52
+Upload [12 of 20] ▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉▉···········| 0:01:48 / 0:02:52 [12/20] 62.0%
 ```
 
 # Columns (Table) 
@@ -298,24 +319,24 @@ Use `log.columns(...)` to format aligned tables while logging data streams. Prin
 cols = log.columns(
     {"label": "tag", "width": "fit"},
     {"label": "duration", "width": 8},
-    {"label": "message", "span": 2}
+    {"label": "message", "width": "50%"}
 )
 
 cols.info.header()
-cols.info("startup", "1.2s", "ready", "subsystem online")
-cols.info("alignment", "0.5s", "resizing", "fit width active")
+cols.info("startup", "1.2s", "ready")
+cols.info("alignment", "0.5s", "resizing")
 ```
 
 Sample table output (plain-text):
 
 ```
-INFO  +----------+----------+-----------------------------+------------------------------+
-INFO  |  tag      |  duration |  message                     |  message                  |
-INFO  +----------+----------+-----------------------------+------------------------------+
-INFO  |  startup  |  1.2s     |  ready                       |  subsystem online         |
-INFO  +----------+----------+-----------------------------+------------------------------+
-INFO  |  alignment|  0.5s     |  resizing                    |  fit width active         |
-INFO  +----------+----------+-----------------------------+------------------------------+
+◼ +---------------------------+--------+-----------------------------------+
+◼ |  tag                      |duration|message                            |
+◼ +---------------------------+--------+-----------------------------------+
+◼ |  startup                  |1.2s    |ready                              |
+◼ +---------------------------+--------+-----------------------------------+
+◼ |  alignment                |0.5s    |resizing                           |
+◼ +---------------------------+--------+-----------------------------------+
 ```
 
 Notice how the `tag` column expands precisely to the longest value thanks to `width="fit"`.
@@ -380,6 +401,9 @@ with log.pb(items).manual() as pb:
 - `LOGBAR_PROGRESS_OUTPUT_INTERVAL` — Default logical step interval between progress renders (default `1`). Applies to stacked bars, region panes, and rolling spinners.
 - `LOGBAR_FORCE_PROGRESS=1` — Force progress rendering in headless/AI-agent/notebook/CI shells.
 - `LOGBAR_DISABLE_HEADLESS_DETECTION=1` — Disable headless/notebook/CI auto-detection.
+- `LOGBAR_DISABLE_SYMBOL_PREFIX=1` — Use text level names instead of the automatic `◼` glyph prefix.
+- `LOGBAR_FORCE_SYMBOL_PREFIX=1` — Request glyph prefixes when ANSI color support is available.
+- `LOGBAR_FORCE_ANSI=1` — Force ANSI color support on redirected streams; combine with `LOGBAR_FORCE_SYMBOL_PREFIX=1` for glyphs there.
 - `NO_COLOR=1` or `ANSI_COLORS_DISABLED=1` — Disable ANSI colors.
 - `COLUMNS` / `LINES` — Override the detected terminal size.
 
@@ -395,6 +419,7 @@ with log.pb(items).manual() as pb:
 - `pb(iterable_or_total, output_interval=None)` creates and attaches a progress bar.
 - `spinner(title="", output_interval=None, interval=0.5, tail_length=4)` creates and attaches an indeterminate rolling progress bar.
 - `columns(..., cols=None, width=None, padding=2)` creates a column printer.
+- `set_symbol_prefix(enabled=True)` toggles the automatic glyph prefix for that logger.
 
 ## `ProgressBar`
 
