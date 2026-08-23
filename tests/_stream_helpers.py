@@ -66,10 +66,12 @@ class MirroredTTY(FakeTTY):
         self._mirror = None
         try:
             if mirror is not None:
-                mirror.flush()
-                mirror.close()
+                try:
+                    mirror.flush()
+                finally:
+                    mirror.close()
         finally:
-            return super().close()
+            super().close()
 
 
 def real_terminal_stream():

@@ -14,14 +14,17 @@ import pty
 import re
 import select
 import struct
+import subprocess
 import sys
 import termios
 import textwrap
 import time
 import unittest
+from pathlib import Path
 
 
 _OBSERVED_SIZE_RE = re.compile(r"observed resize (\d+)x(\d+)")
+_PTY_WORKER_ENV = "LOGBAR_PTY_RESIZE_WORKER"
 
 
 class TestDynamicPTYResize(unittest.TestCase):
@@ -32,6 +35,33 @@ class TestDynamicPTYResize(unittest.TestCase):
 
         if not hasattr(pty, "fork") or not hasattr(termios, "TIOCSWINSZ"):
             self.skipTest("PTY window resizing is unavailable on this platform")
+
+        if os.environ.get(_PTY_WORKER_ENV) != "1":
+            # pytest-xdist workers may have support threads. Run forkpty in a
+            # fresh interpreter that has not started those threads.
+            worker_env = dict(os.environ)
+            worker_env[_PTY_WORKER_ENV] = "1"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-W",
+                    "error",
+                    "-m",
+                    "tests.test_pty_resize",
+                ],
+                cwd=Path(__file__).resolve().parent.parent,
+                env=worker_env,
+                capture_output=True,
+                text=True,
+                timeout=12,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=f"PTY resize worker failed:\n{result.stdout}{result.stderr}",
+            )
+            return
 
         child_script = textwrap.dedent(
             """
