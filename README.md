@@ -248,6 +248,29 @@ Downloading [2 of 5] ███████████████▌░░░�
 
 The bar always re-renders at the bottom, so log lines never overwrite your progress.
 
+### tqdm-compatible API
+
+For code already using `tqdm`, LogBar exposes a drop-in replacement that
+does not require the `tqdm` package:
+
+```py
+from logbar import tqdm, trange, logging_redirect_tqdm
+
+for item in tqdm(items, desc="training"):
+    process(item)
+
+for i in trange(100):
+    step(i)
+
+with logging_redirect_tqdm():
+    log.info("this is safe to call inside a tqdm loop")
+```
+
+`tqdm` supports iterable and manual `total=` modes, `desc`, `set_description`,
+`set_postfix`, `update`, `n`, `format_dict`, and `tqdm.write`. The underlying
+implementation is backed by LogBar's `ProgressBar`, so it behaves the same way
+in interactive and headless/CI environments.
+
 ### Indeterminate Progress
 
 When the total work is unknown, `log.spinner()` provides a rolling indicator that redraws every 500 ms until closed:

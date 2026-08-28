@@ -12,6 +12,7 @@ from .region_progress import RegionProgressBar, RegionRollingProgressBar
 from .screen import RegionScreen
 from .screen_backend import AnsiRegionScreenBackend, RegionScreenBackend
 from .session import RegionScreenSession
+from .tqdm import logging_redirect_tqdm, tqdm, trange
 
 __all__ = [
     "AnsiRegionScreenBackend",
@@ -23,6 +24,9 @@ __all__ = [
     "RegionScreenBackend",
     "RegionScreenSession",
     "columns",
+    "logging_redirect_tqdm",
     "pane",
     "rows",
+    "tqdm",
+    "trange",
 ]
