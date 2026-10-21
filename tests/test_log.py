@@ -152,6 +152,55 @@ class TestProgressBar(unittest.TestCase):
         # The log output should have been written to the patched stdout buffer.
         self.assertIn("logging without terminal", stdout.getvalue())
 
+    def test_shared_upgrades_preexisting_stdlib_logger(self):
+        """Upgrade a logger created before LogBar changes the logger class."""
+
+        script = textwrap.dedent(
+            """
+            import logging
+
+            preexisting = logging.getLogger("logbar")
+            handler = logging.NullHandler()
+            preexisting.addHandler(handler)
+
+            from logbar import LogBar
+
+            log = LogBar.shared()
+            assert log is preexisting
+            assert isinstance(log, LogBar)
+            assert logging.getLogger("logbar") is log
+            assert handler in log.handlers
+            assert callable(log.pb)
+
+            bar = log.pb(range(1))
+            list(bar)
+            bar.close()
+            """
+        )
+        env = dict(os.environ)
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            f"{REPO_ROOT}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else str(REPO_ROOT)
+        )
+
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"shared logger upgrade failed:\nstdout={completed.stdout}\nstderr={completed.stderr}",
+        )
+
     def test_log_plain_stream_omits_ansi_sequences(self):
         """Avoid leaking ANSI prefixes when stdout is not a TTY."""
 

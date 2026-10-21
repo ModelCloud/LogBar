@@ -1400,7 +1400,8 @@ class LogBar(logging.Logger):
 
         with _STATE_LOCK:
             if logger is not None:
-                shared_logger = logger
+                shared_logger = cls._ensure_shared_instance(logger)
+                logger = shared_logger
             else:
                 original_logger_cls = None
 
@@ -1409,18 +1410,19 @@ class LogBar(logging.Logger):
 
                 logging.setLoggerClass(LogBar)
                 try:
-                    logger = logging.getLogger("logbar")
+                    shared_logger = logging.getLogger("logbar")
                 finally:
                     if not override_logger and original_logger_cls is not None:
                         logging.setLoggerClass(original_logger_cls)
 
-                logger.propagate = False
-                logger.setLevel(logging.INFO)
+                shared_logger = cls._ensure_shared_instance(shared_logger)
+                logger = shared_logger
+                shared_logger.propagate = False
+                shared_logger.setLevel(logging.INFO)
                 created_logger = True
-                shared_logger = logger
 
         if shared_logger is None:
-            shared_logger = logging.getLogger("logbar")
+            shared_logger = cls._ensure_shared_instance(logging.getLogger("logbar"))
 
         if created_logger:
             with _RENDER_LOCK:
@@ -1431,6 +1433,24 @@ class LogBar(logging.Logger):
 
         _log_headless_state_once()
 
+        return shared_logger
+
+    @classmethod
+    def _ensure_shared_instance(cls, shared_logger):
+        """Upgrade a pre-existing stdlib logger to the full LogBar API."""
+
+        if isinstance(shared_logger, cls):
+            return shared_logger
+
+        if not isinstance(shared_logger, logging.Logger):
+            raise TypeError("The shared logbar logger must be a logging.Logger instance.")
+
+        # `logging.getLogger("logbar")` returns an existing logger regardless
+        # of later `setLoggerClass` calls. Upgrade that instance in place so
+        # callers holding the earlier reference also gain `pb()`, `spinner()`,
+        # and the custom level helpers.
+        shared_logger.__class__ = cls
+        shared_logger._init_instance_state()
         return shared_logger
 
 
@@ -1578,6 +1598,11 @@ class LogBar(logging.Logger):
         """Initialize the logger and install the legacy level proxies."""
 
         super().__init__(name)
+        self._init_instance_state()
+
+    def _init_instance_state(self) -> None:
+        """Install per-instance helpers used by LogBar's public API."""
+
         self._warning = self.warning
         self._debug = self.debug
         self._info = self.info
