@@ -160,10 +160,18 @@ class tqdm(ProgressBar):
 
     @classmethod
     def write(cls, s: str, file=None, end: str = "\n", nolock: bool = False) -> None:
-        file = file or sys.stdout
-        file.write(s + end)
+        target = file or sys.stdout
+        if target is sys.stdout:
+            # Route through the renderer so an active footer is cleared and
+            # repainted instead of being overwritten by the raw write.
+            from .logbar import write_through_stack
+
+            write_through_stack(s + end)
+            return
+
+        target.write(s + end)
         try:
-            file.flush()
+            target.flush()
         except Exception:
             pass
 

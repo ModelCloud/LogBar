@@ -446,6 +446,28 @@ def _should_defer_log_output_locked(terminal_rows: int) -> bool:
     )
 
 
+_DEFERRED_LOG_LIMIT = 1000
+
+
+def _append_deferred_log_record_locked(normalized_level: int, str_msg: str) -> None:
+    """Append one buffered record, evicting plain INFO rows before WARNING+."""
+
+    state = _coordinator_state()
+    records = state._deferred_log_records
+
+    if len(records) >= _DEFERRED_LOG_LIMIT:
+        # A fullscreen footer must never grow without bound. Drop the oldest
+        # non-priority row first so WARNING/ERROR/CRITICAL survive eviction.
+        for index, (level, _message) in enumerate(records):
+            if level < logging.WARNING:
+                del records[index]
+                break
+        else:
+            del records[0]
+
+    records.append((normalized_level, str_msg))
+
+
 def _flush_deferred_logs_locked() -> None:
     """Replay log lines buffered while the stack occupied the full terminal."""
 
@@ -468,6 +490,32 @@ def _flush_deferred_logs_locked() -> None:
             str_msg,
             allow_defer=False,
         )
+
+
+def _replay_deferred_log_record(
+    normalized_level: int,
+    str_msg: str,
+    backend_state: RenderBackendState | None,
+) -> None:
+    """Best-effort replay of one buffered record during shutdown."""
+
+    try:
+        level_label = LOGGING_TO_LEVEL_LABEL.get(
+            normalized_level,
+            str(logging.getLevelName(normalized_level)),
+        )
+        if logger is not None:
+            logger._emit_log_line_locked(
+                normalized_level,
+                level_label,
+                str_msg,
+                allow_defer=False,
+                backend_state=backend_state,
+            )
+        else:
+            _print(f"{level_label} {str_msg}", flush=True)
+    except Exception:  # noqa: BLE001 - shutdown must never raise
+        return
 
 
 def attach_progress_bar(pb: "ProgressBar") -> None:
@@ -710,6 +758,7 @@ def _shutdown_default_renderer() -> None:
     global last_rendered_length
 
     attached_bars = []
+    deferred_records: list[tuple[int, str]] = []
     backend_state = None
     cursor_was_hidden = False
 
@@ -718,6 +767,7 @@ def _shutdown_default_renderer() -> None:
             with _STATE_LOCK:
                 coordinator_state = _coordinator_state()
                 attached_bars = list(coordinator_state._attached_progress_bars)
+                deferred_records = list(coordinator_state._deferred_log_records)
                 cursor_was_hidden = bool(coordinator_state._cursor_hidden)
                 coordinator_state._attached_progress_bars = []
                 coordinator_state._dirty_progress_bars.clear()
@@ -747,6 +797,12 @@ def _shutdown_default_renderer() -> None:
                 _clear_progress_stack_for_exit()
 
             last_rendered_length = 0
+
+            # Replay records buffered behind a fullscreen footer before we
+            # release terminal ownership. This keeps ERROR/CRITICAL messages
+            # visible instead of silently discarding them at interpreter exit.
+            for normalized_level, str_msg in deferred_records:
+                _replay_deferred_log_record(normalized_level, str_msg, backend_state)
 
             for bar in attached_bars:
                 try:
@@ -788,6 +844,24 @@ def _prepare_progress_stack_for_log_locked(backend_state: Optional[RenderBackend
     # are restored even when the frame contents are otherwise unchanged.
     coordinator_state._stack_redraw_invalidated = True
     return True
+
+
+def write_through_stack(text: str) -> None:
+    """Write raw text above the active progress stack without corrupting it."""
+
+    with _RENDER_LOCK:
+        backend_state = _current_render_backend_state()
+        if backend_state.headless:
+            _print(text, end="", flush=True)
+            return
+
+        _clear_progress_stack_locked(
+            show_cursor=False,
+            for_log_output=True,
+            backend_state=backend_state,
+        )
+        _print(text, end="", flush=True)
+        _render_progress_stack_locked(backend_state=backend_state)
 
 
 def _iter_contiguous_blocks(indexes: Sequence[int]):
@@ -1486,16 +1560,22 @@ class LogBar(logging.Logger):
     def history_add(self, msg) -> bool:
         """Track deduplicated messages for the `.once(...)` helpers."""
 
-        h = hash(msg) # TODO only msg is checked not level + msg
+        try:
+            key = (type(msg), msg)
+            hash(key)
+        except TypeError:
+            # Unhashable payloads still need deduplication; fall back to a
+            # stable textual representation instead of raising.
+            key = (type(msg), repr(msg))
 
         with self._history_lock:
-            if h in self.history:
+            if key in self.history:
                 return False # add failed since it already exists
 
             if len(self.history) > self.history_limit:
                 self.history.clear()
 
-            self.history.add(h)
+            self.history.add(key)
 
         return True
 
@@ -1787,7 +1867,6 @@ class LogBar(logging.Logger):
     ) -> None:
         """Emit one log line while preserving any active progress stack."""
 
-        coordinator_state = _coordinator_state()
         global last_rendered_length
 
         backend_state = backend_state or _current_render_backend_state()
@@ -1815,7 +1894,7 @@ class LogBar(logging.Logger):
             rendered_message = f"{str_msg}{' ' * excess_padding}" if excess_padding else str_msg
 
         if allow_defer and _should_defer_log_output_locked(terminal_rows):
-            coordinator_state._deferred_log_records.append((normalized_level, str_msg))
+            _append_deferred_log_record_locked(normalized_level, str_msg)
             return
 
         # Preserve terminal history when logs arrive above an active bottom

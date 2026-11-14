@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import threading
 from typing import Literal, Optional, Sequence
@@ -16,6 +17,7 @@ from .layout import Viewport
 
 
 VerticalAnchor = Literal["top", "bottom"]
+DEFAULT_REGION_SCROLLBACK = 1000
 
 
 @dataclass(frozen=True)
@@ -181,10 +183,15 @@ class LogRegion(Region):
         body_lines: Optional[Sequence[str]] = None,
         *,
         footer_lines: Optional[Sequence[str]] = None,
+        max_scrollback: int = DEFAULT_REGION_SCROLLBACK,
     ) -> None:
         """Store body and footer content independently for one region."""
 
-        self._body_lines = [str(line) for line in (body_lines or ())]
+        self._max_scrollback = max(1, int(max_scrollback))
+        self._body_lines = deque(
+            (str(line) for line in (body_lines or ())),
+            maxlen=self._max_scrollback,
+        )
         self._footer_lines = [str(line) for line in (footer_lines or ())]
         self._lock = threading.RLock()
 
@@ -206,7 +213,10 @@ class LogRegion(Region):
         """Replace the visible body scrollback source."""
 
         with self._lock:
-            self._body_lines = [str(line) for line in lines]
+            self._body_lines = deque(
+                (str(line) for line in lines),
+                maxlen=self._max_scrollback,
+            )
         return self
 
     def append_body_line(self, line: str) -> "LogRegion":
@@ -227,7 +237,7 @@ class LogRegion(Region):
         """Remove all body content from the region."""
 
         with self._lock:
-            self._body_lines = []
+            self._body_lines.clear()
         return self
 
     def set_footer_lines(self, lines: Sequence[str]) -> "LogRegion":
@@ -269,7 +279,7 @@ class LogRegion(Region):
             footer_visible = self._footer_lines[-height:]
             footer_count = min(len(footer_visible), height)
             body_height = max(0, height - footer_count)
-            body_visible = self._body_lines[-body_height:] if body_height > 0 else []
+            body_visible = list(self._body_lines)[-body_height:] if body_height > 0 else []
 
             rows = [""] * height
             body_start = max(0, body_height - len(body_visible))
