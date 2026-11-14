@@ -17,7 +17,20 @@ ANSI_RESET = "\033[0m"
 ANSI_BOLD_RESET = "\033[22m"
 TITLE_BASE_COLOR = "\033[38;5;250m"
 TITLE_HIGHLIGHT_COLOR = "\033[1m\033[38;5;15m"
-ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;?]*[ -/]*[@-~]")
+# Cover every escape family that can move the cursor, rewrite the title, or
+# smuggle payloads through the terminal: CSI, OSC (BEL/ST terminated), the
+# DCS/SOS/PM/APC string families, and two-byte ESC sequences. OSC/DCS are
+# matched to the end of the string when unterminated so a truncated sequence
+# can never leak its payload.
+ANSI_ESCAPE_RE = re.compile(
+    r"\x1B\](?:[^\x07\x1B]|\x1B(?!\\))*(?:\x07|\x1B\\)?"
+    r"|\x1B[PX^_](?:[^\x1B]|\x1B(?!\\))*(?:\x1B\\)?"
+    r"|\x1B\[[0-9;?]*[ -/]*[@-~]"
+    r"|\x1B[\x40-\x5A\x5C-\x5F]",
+    re.DOTALL,
+)
+_SGR_ESCAPE_RE = re.compile(r"\x1B\[[0-9;:]*m\Z")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 TAB_STOP = 8
 
 BLOCK_PARTIAL_CHARS = ("", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█")
@@ -54,6 +67,41 @@ def strip_ansi(text: str) -> str:
     if "\x1b" not in text:
         return text
     return ANSI_ESCAPE_RE.sub("", text)
+
+
+def _sanitize_plain_fragment(fragment: str) -> str:
+    """Collapse row-breaking controls and drop remaining C0/C1 characters."""
+
+    if not fragment:
+        return fragment
+    fragment = fragment.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return _CONTROL_CHARS_RE.sub("", fragment)
+
+
+def sanitize_text(text: str, *, allow_sgr: bool = True) -> str:
+    """Strip unsafe terminal control sequences from untrusted text.
+
+    SGR colour sequences are preserved when ``allow_sgr`` is true so legitimate
+    coloured output keeps working. OSC, DCS, cursor-movement CSI and all other
+    escape sequences are removed. C0/C1 control characters are dropped, and
+    CR/LF/TAB collapse to a single space so one logical value stays on one row.
+    """
+
+    if not text:
+        return text
+    if "\x1b" not in text and not _CONTROL_CHARS_RE.search(text):
+        return text
+
+    parts: list[str] = []
+    cursor = 0
+    for match in ANSI_ESCAPE_RE.finditer(text):
+        parts.append(_sanitize_plain_fragment(text[cursor:match.start()]))
+        token = match.group(0)
+        if allow_sgr and _SGR_ESCAPE_RE.match(token):
+            parts.append(token)
+        cursor = match.end()
+    parts.append(_sanitize_plain_fragment(text[cursor:]))
+    return "".join(parts)
 
 
 @lru_cache(maxsize=4096)

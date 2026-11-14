@@ -23,7 +23,7 @@ from .terminal import (
 from .columns import ColumnSpec, ColumnsPrinter
 from .buffer import get_buffered_stdout
 from .coordinator import RenderCoordinator
-from .drawing import ansi_to_html, strip_ansi, visible_length
+from .drawing import ansi_to_html, sanitize_text, strip_ansi, visible_length
 from .region import LineRegion
 
 # global static/shared logger instance
@@ -1870,6 +1870,10 @@ class LogBar(logging.Logger):
         global last_rendered_length
 
         backend_state = backend_state or _current_render_backend_state()
+        str_msg = sanitize_text(
+            str_msg,
+            allow_sgr=backend_state.supports_ansi and not backend_state.headless,
+        )
         columns = backend_state.columns
         terminal_rows = backend_state.lines
         use_symbol_prefix = self._resolve_symbol_prefix(backend_state)
