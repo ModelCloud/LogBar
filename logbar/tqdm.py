@@ -100,7 +100,10 @@ class tqdm(ProgressBar):
             return
         if n == 0:
             return
-        self.current_iter_step = max(0, self.current_iter_step + n)
+        # Guard the read-modify-write; the lock is released before drawing so
+        # the counter lock never nests inside the render lock.
+        with self._counter_lock:
+            self.current_iter_step = max(0, self.current_iter_step + n)
         self.draw()
 
     def draw(self, force: bool = False) -> None:
@@ -136,7 +139,8 @@ class tqdm(ProgressBar):
 
     @n.setter
     def n(self, value: int) -> None:
-        self.current_iter_step = value
+        with self._counter_lock:
+            self.current_iter_step = value
 
     @property
     def format_dict(self) -> dict[str, Any]:

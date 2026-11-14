@@ -531,3 +531,9 @@ bar lifecycle, deferred-log buffer cap, and region scrollback guarantees.
 See [Terminal escape-sequence safety](docs/terminal-safety.md) for how
 untrusted log messages, titles, subtitles, and `tqdm` fields are sanitized
 before they reach the terminal.
+
+## Thread safety
+
+See [Thread-safe progress counters](docs/thread-safety.md) for how progress
+counters stay exact when several threads advance one bar, including in headless
+CI mode and on free-threaded Python.

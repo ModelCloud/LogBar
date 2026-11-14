@@ -571,6 +571,11 @@ class ProgressBar:
         self.iterable = auto_iter if auto_iter else iterable
 
         self.bar_length = 0
+        # Counter state is mutated from worker threads and must stay exact even
+        # when the render lock is skipped (headless mode) or absent
+        # (free-threaded builds). Keep it separate from rendering so the
+        # draw path never nests the two locks.
+        self._counter_lock = threading.Lock()
         self.current_iter_step = 0
         self.time = time.time()
         self._title_animation_start = self.time
@@ -1422,7 +1427,8 @@ class ProgressBar:
     def next(self):
         """Advance progress by one logical step."""
 
-        self.current_iter_step += 1
+        with self._counter_lock:
+            self.current_iter_step += 1
         return self
 
     def __iter__(self):
