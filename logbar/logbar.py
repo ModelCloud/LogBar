@@ -21,7 +21,7 @@ from .terminal import (
     terminal_size,
 )
 from .columns import ColumnSpec, ColumnsPrinter
-from .buffer import get_buffered_stdout
+from .buffer import get_buffered_stdout, reinit_after_fork
 from .coordinator import RenderCoordinator
 from .drawing import ansi_to_html, sanitize_text, strip_ansi, visible_length
 from .region import LineRegion
@@ -30,11 +30,108 @@ from .region import LineRegion
 logger = None
 last_rendered_length = 0
 
-_STATE_LOCK = threading.RLock()
-_RENDER_LOCK = threading.RLock()
+class _ForkSafeRLock:
+    """Reentrant lock whose backing lock is replaced in a forked child.
+
+    A child inherits a ``threading.RLock`` together with its owner, but not the
+    owning thread. If the lock was held across ``fork()`` the child can never
+    acquire it again. ``region_logger``, ``region_progress`` and ``screen``
+    import ``_RENDER_LOCK`` by value, so rebinding the module global would
+    leave those references on the dead lock; this proxy keeps one stable object
+    and swaps the inner lock instead.
+    """
+
+    __slots__ = ("_lock",)
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._lock.release()
+
+    def _reinit_after_fork(self) -> None:
+        """Install an unlocked backing lock in the forked child."""
+
+        self._lock = threading.RLock()
+
+
+_STATE_LOCK = _ForkSafeRLock()
+_RENDER_LOCK = _ForkSafeRLock()
 _EXTERNAL_TERMINAL_HANDOFF_HOOKS_INSTALLED = False
 _HEADLESS_LOG_EMITTED = False
-_HEADLESS_LOG_LOCK = threading.RLock()
+_HEADLESS_LOG_LOCK = _ForkSafeRLock()
+
+
+_FORK_HELD_LOCKS: list = []
+
+
+def _fork_guard_locks() -> tuple:
+    """Return every process-wide lock that must not stay held in a child.
+
+    Order matches the nesting used by the renderer (render -> state ->
+    coordinator), so acquiring them here cannot deadlock against a render in
+    progress on another thread.
+    """
+
+    locks = [_RENDER_LOCK, _STATE_LOCK, _HEADLESS_LOG_LOCK]
+    coordinator = globals().get("_DEFAULT_RENDER_COORDINATOR")
+    coordinator_lock = getattr(coordinator, "_lock", None)
+    if coordinator_lock is not None:
+        locks.append(coordinator_lock)
+    return tuple(locks)
+
+
+def _before_fork() -> None:
+    """Quiesce the renderer before a child inherits its locks."""
+
+    _FORK_HELD_LOCKS.clear()
+    for lock in _fork_guard_locks():
+        lock.acquire()
+        _FORK_HELD_LOCKS.append(lock)
+
+
+def _after_fork_in_parent() -> None:
+    """Release the renderer locks in the parent that forked."""
+
+    for lock in reversed(_FORK_HELD_LOCKS):
+        lock.release()
+    _FORK_HELD_LOCKS.clear()
+
+
+def _after_fork_in_child() -> None:
+    """Rebuild every renderer primitive a child cannot inherit."""
+
+    _FORK_HELD_LOCKS.clear()
+
+    for lock in (_RENDER_LOCK, _STATE_LOCK, _HEADLESS_LOG_LOCK):
+        lock._reinit_after_fork()
+
+    coordinator = globals().get("_DEFAULT_RENDER_COORDINATOR")
+    if coordinator is not None:
+        coordinator._lock = threading.RLock()
+        # The refresh worker is not inherited; a child starts its own on demand.
+        coordinator.state._refresh_thread = None
+
+    # Cached stdout wrappers point at drain threads that do not exist here.
+    reinit_after_fork()
+
+
+if hasattr(os, "register_at_fork"):  # pragma: no branch - POSIX only
+    os.register_at_fork(
+        before=_before_fork,
+        after_in_parent=_after_fork_in_parent,
+        after_in_child=_after_fork_in_child,
+    )
 
 def _stdout_stream():
     """Return the stdout stream wrapper used by all renderer writes."""
@@ -104,6 +201,14 @@ def _running_in_notebook_environment() -> bool:
 
     if os.environ.get("JPY_PARENT_PID") or os.environ.get("IPYKERNEL_PARENT_PID"):
         return True
+
+    # A forked child can deadlock on a module lock that a parent thread held
+    # while importing (issue #77): the child inherits the lock but not the
+    # importing thread. A real IPython kernel always has IPython imported
+    # already, so gate the import on `sys.modules` instead of probing with a
+    # `from IPython import ...` on every call.
+    if "IPython" not in sys.modules:
+        return False
 
     try:  # defer import to avoid hard dependency on IPython
         from IPython import get_ipython
