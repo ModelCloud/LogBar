@@ -8,13 +8,20 @@
 from __future__ import annotations
 
 import io
+import os
 import queue
 import sys
 import threading
 import weakref
+from contextlib import suppress
 from typing import Optional, Tuple
 
 QueueItem = Tuple[str, Optional[str], Optional[threading.Event]]
+
+# A drain thread that is gone (forked child) or wedged must never block a
+# writer forever. The fork handler in `logbar.logbar` rebuilds the wrapper in a
+# child; this bound is the defence in depth for every other stall.
+_FLUSH_TIMEOUT_SECONDS = 5.0
 
 _CACHE_LOCK = threading.Lock()
 _CACHED_WRAPPERS: dict[int, Tuple[Optional[weakref.ReferenceType[object]], "QueueingStdout"]] = {}
@@ -38,6 +45,11 @@ class QueueingStdout:
             weakref.finalize(stream, self.close)
         self._queue: "queue.Queue[QueueItem]" = queue.Queue()
         self._closed = False
+        # The drain thread does not survive ``fork()``: a child inherits the
+        # queue and this wrapper object but not the worker. Recording the
+        # creating pid lets a child drain on its own thread instead of waiting
+        # for a worker that can never answer.
+        self._owner_pid = os.getpid()
         self._state_lock = threading.Lock()
         self._close_event: Optional[threading.Event] = None
         self._logbar_queue_wrapped = True
@@ -67,6 +79,15 @@ class QueueingStdout:
         if not data:
             return 0
 
+        self._ensure_live_objects()
+        if self._worker is None:
+            # No drain thread in this process (a forked child): write through so
+            # the bytes are not stranded in a queue nobody drains.
+            with self._state_lock:
+                if self._closed:
+                    raise ValueError("I/O operation on closed file.")
+            self._apply_item(data)
+            return len(data)
         with self._state_lock:
             if self._closed:
                 raise ValueError("I/O operation on closed file.")
@@ -82,16 +103,22 @@ class QueueingStdout:
     def flush(self):  # type: ignore[override]
         """Block until queued writes are flushed to the wrapped stream."""
 
+        self._ensure_live_objects()
         event = threading.Event()
         with self._state_lock:
             if self._closed:
                 raise ValueError("flush of closed file")
             self._queue.put(("flush", None, event))
-        event.wait()
+        if self._drain_thread_unusable():
+            self._drain_inline()
+            return
+        if not event.wait(_FLUSH_TIMEOUT_SECONDS):
+            self._drain_inline()
 
     def close(self):  # type: ignore[override]
         """Drain pending output and stop the worker thread."""
 
+        self._ensure_live_objects()
         with self._state_lock:
             if self._closed:
                 event = self._close_event
@@ -104,14 +131,20 @@ class QueueingStdout:
                 event = threading.Event()
                 self._close_event = event
                 self._queue.put(("close", None, event))
-        event.wait()
+        if self._drain_thread_unusable():
+            self._drain_inline()
+            return
+        if not event.wait(_FLUSH_TIMEOUT_SECONDS):
+            self._drain_inline()
 
     @property
     def closed(self):  # type: ignore[override]
         """Mirror the standard file-like `closed` attribute."""
 
+        self._ensure_live_objects()
         with self._state_lock:
             return self._closed
+
 
     def fileno(self):  # type: ignore[override]
         """Expose `fileno()` when the wrapped stream supports it."""
@@ -193,6 +226,66 @@ class QueueingStdout:
             stream = None
             flush = None
 
+    def _ensure_live_objects(self) -> None:
+        """Re-arm the per-process primitives when a parent created this wrapper.
+
+        A child inherits the queue, its locks and the parent's drain thread.
+        The thread does not exist here, and a ``queue`` mutex the parent's
+        worker held at fork time would never be released, so replace the
+        objects instead of touching them.
+        """
+
+        if self._owner_pid == os.getpid():
+            return
+        self._owner_pid = os.getpid()
+        self._queue = queue.Queue()
+        self._state_lock = threading.Lock()
+        self._close_event = None
+        self._worker = None
+
+    def _drain_thread_unusable(self) -> bool:
+        """Return whether this process has no usable drain thread for the queue."""
+
+        worker = self._worker
+        return worker is None or not worker.is_alive()
+
+    def _apply_item(self, payload: str | None) -> None:
+        """Write and flush one queue item on the calling thread, best effort.
+
+        A write failure must not turn ``flush()`` into an exception the caller
+        did not ask for, which is also how the drain worker treats it.
+        """
+
+        with suppress(Exception):
+            stream = self._target_stream()
+            if payload:
+                stream.write(payload)
+            flush = getattr(stream, "flush", None)
+            if callable(flush):
+                flush()
+
+    def _drain_inline(self) -> None:
+        """Apply queued work on the calling thread after a drain-thread stall.
+
+        Used when the worker is gone (a forked child inherits the queue but not
+        the thread) or did not answer within ``_FLUSH_TIMEOUT_SECONDS``.
+        ``queue.get`` is atomic, so a live worker cannot apply the same item
+        twice.
+        """
+
+        while True:
+            try:
+                action, payload, event = self._queue.get_nowait()
+            except queue.Empty:
+                return
+
+            self._apply_item(payload)
+            if event is not None:
+                event.set()
+
+            if action == "close":
+                return
+
     def __getattr__(self, item):
         """Fall back to the wrapped stream for unknown attributes."""
 
@@ -258,4 +351,21 @@ def get_buffered_stdout(stream: Optional[object] = None) -> object:
         return wrapper
 
 
-__all__ = ["QueueingStdout", "get_buffered_stdout"]
+def reinit_after_fork() -> None:
+    """Drop inherited wrappers and re-arm the cache lock in a forked child.
+
+    A child inherits ``_CACHED_WRAPPERS`` and ``_CACHE_LOCK``'s state but not
+    the drain threads, so every cached wrapper would wait on a worker that does
+    not exist in this process. Clearing the cache makes the child build a fresh
+    wrapper with its own thread.
+    """
+
+    # Rebind instead of mutating: a child may have inherited ``_CACHED_WRAPPERS``
+    # (or ``_CACHE_LOCK``) mid-operation, and touching that object state would
+    # wait on a lock the owning thread never releases in this process.
+    global _CACHE_LOCK, _CACHED_WRAPPERS
+    _CACHE_LOCK = threading.Lock()
+    _CACHED_WRAPPERS = {}
+
+
+__all__ = ["QueueingStdout", "get_buffered_stdout", "reinit_after_fork"]

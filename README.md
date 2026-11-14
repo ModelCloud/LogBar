@@ -147,6 +147,12 @@ Plain-text sketch (this example explicitly disables ANSI in the pane loggers):
 +----------------------+----------------------+
 ```
 
+Forked workers are safe: LogBar reinitialises its render locks and stdout
+drain thread in the child, so a `multiprocessing` `fork` pool can log with
+`PYTHONUNBUFFERED=1` instead of blocking on a thread it never inherited. See
+[fork safety](docs/fork-safety.md) for the `os.register_at_fork` flow and the
+bounded flush wait.
+
 # Quick Start
 
 ```py
