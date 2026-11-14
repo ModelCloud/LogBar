@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Sequence, Union
 
+from .drawing import sanitize_text
 from .logbar import LEVEL, LogBar, _RENDER_LOCK, _level_prefix
 from .region import LogRegion
 
@@ -142,6 +143,7 @@ class RegionLogBar(LogBar):
 
         del normalized_level, allow_defer, backend_state
 
+        str_msg = sanitize_text(str_msg, allow_sgr=self._supports_ansi)
         use_symbol_prefix = self._resolve_symbol_prefix()
         prefix = _level_prefix(level_label, self._supports_ansi, use_symbol_prefix)
         message_lines = str(str_msg).splitlines() or [""]

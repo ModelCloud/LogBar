@@ -525,3 +525,9 @@ Style registry helpers:
 
 See [Memory bounds and bar lifecycle](docs/memory-bounds.md) for the progress
 bar lifecycle, deferred-log buffer cap, and region scrollback guarantees.
+
+## Terminal safety
+
+See [Terminal escape-sequence safety](docs/terminal-safety.md) for how
+untrusted log messages, titles, subtitles, and `tqdm` fields are sanitized
+before they reach the terminal.

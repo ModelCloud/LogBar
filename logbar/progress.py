@@ -38,6 +38,7 @@ from .drawing import (
     TITLE_HIGHLIGHT_COLOR,
     CellBarRenderer,
     cached_display_atoms,
+    sanitize_text,
     strip_ansi,
     truncate_ansi,
     visible_length,
@@ -760,6 +761,7 @@ class ProgressBar:
     def title(self, title: str):
         """Set the title shown before the bar and update width tracking."""
 
+        title = sanitize_text(title, allow_sgr=not self._headless)
         if title == self._title:
             return self
 
@@ -791,6 +793,7 @@ class ProgressBar:
     def subtitle(self, subtitle: str):
         """Set the subtitle shown between the title and the bar."""
 
+        subtitle = sanitize_text(subtitle, allow_sgr=not self._headless)
         if subtitle == self._subtitle:
             return self
 
