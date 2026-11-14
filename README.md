@@ -520,3 +520,8 @@ Style registry helpers:
 - `cols.info.simulate(...)` for dry-run width growth without output
 - `cols.update(...)` for runtime schema changes
 - `cols.width()` for the current rendered width
+
+## Memory bounds
+
+See [Memory bounds and bar lifecycle](docs/memory-bounds.md) for the progress
+bar lifecycle, deferred-log buffer cap, and region scrollback guarantees.

@@ -1427,20 +1427,23 @@ class ProgressBar:
 
         iterable = self.iterable
 
-        for obj in iterable:
-            # update running state
-            if not self._iterating:
-                self.iterating = True
+        try:
+            for obj in iterable:
+                # update running state
+                if not self._iterating:
+                    self._iterating = True
 
-            self.next()
+                self.next()
 
-            if self._render_mode == RenderMode.AUTO:
-                self.draw()
+                if self._render_mode == RenderMode.AUTO:
+                    self.draw()
 
-            yield obj
-
-        self.close()
-        return
+                yield obj
+        finally:
+            # ``break`` and exceptions leave the loop without exhausting the
+            # iterable, so the bar must detach here instead of relying on
+            # ``__del__`` (the coordinator keeps a strong reference).
+            self.close()
 
     @_render_locked
     def close(self):
